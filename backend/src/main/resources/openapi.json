@@ -1,0 +1,1964 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Review Engine API",
+    "version": "0.1.0",
+    "description": "Authenticated REST API for the self-hosted Review Engine. Health checks and this document are public."
+  },
+  "servers": [
+    {
+      "url": "/api/v1",
+      "description": "Current deployment"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    },
+    {
+      "browserSession": []
+    }
+  ],
+  "tags": [
+    {"name": "Health"},
+    {"name": "Sessions"},
+    {"name": "Categories"},
+    {"name": "Templates"},
+    {"name": "Entities"},
+    {"name": "Reviews"},
+    {"name": "Comparisons"},
+    {"name": "Relations"},
+    {"name": "Portability"},
+    {"name": "Access tokens"}
+  ],
+  "paths": {
+    "/health/live": {
+      "get": {
+        "operationId": "getLiveness",
+        "tags": ["Health"],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The process is live.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Health"}
+              }
+            }
+          },
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "getReadiness",
+        "tags": ["Health"],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The application and database are ready.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Health"}
+              }
+            }
+          },
+          "503": {
+            "description": "The database is not ready.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Health"}
+              }
+            }
+          },
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiDocument",
+        "tags": ["Health"],
+        "security": [],
+        "servers": [
+          {"url": "/"},
+          {"url": "/api/v1"}
+        ],
+        "responses": {
+          "200": {
+            "description": "This OpenAPI document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/session": {
+      "post": {
+        "operationId": "createBrowserSession",
+        "tags": ["Sessions"],
+        "summary": "Exchange an administrator or active API token for an opaque browser session.",
+        "description": "The credential is accepted only in this bounded JSON body and is never returned. The session is persisted as a hash and issued as an HttpOnly, SameSite=Strict cookie for /api/v1. Configure REVIEW_PUBLIC_ORIGIN to the canonical browser-facing origin; HTTPS origins make the cookie Secure.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Must exactly equal REVIEW_PUBLIC_ORIGIN, or the direct request origin when that setting is omitted for local development.",
+            "schema": {"type": "string", "format": "uri"}
+          }
+        ],
+        "requestBody": {"$ref": "#/components/requestBodies/SessionCreate"},
+        "responses": {
+          "204": {
+            "description": "The session was created.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "Opaque review_engine_session cookie; HttpOnly, SameSite=Strict, Path=/api/v1, Max-Age=43200, and Secure for HTTPS deployments.",
+                "schema": {"type": "string"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "413": {"$ref": "#/components/responses/PayloadTooLarge"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteBrowserSession",
+        "tags": ["Sessions"],
+        "summary": "Revoke and expire the current browser session.",
+        "description": "Idempotent. If the session cookie is present, Origin must exactly match the configured or direct request origin.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "description": "Required when the review_engine_session cookie is present.",
+            "schema": {"type": "string", "format": "uri"}
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The session is absent or revoked and its browser cookie is expired.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "Expires review_engine_session with the same security attributes.",
+                "schema": {"type": "string"}
+              }
+            }
+          },
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/categories": {
+      "get": {
+        "operationId": "listCategories",
+        "tags": ["Categories"],
+        "parameters": [
+          {"$ref": "#/components/parameters/Cursor"},
+          {"$ref": "#/components/parameters/IncludeArchived"},
+          {"$ref": "#/components/parameters/Limit"}
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of categories.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/CategoryPage"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "post": {
+        "operationId": "createCategory",
+        "tags": ["Categories"],
+        "requestBody": {"$ref": "#/components/requestBodies/CategoryCreate"},
+        "responses": {
+          "201": {
+            "description": "The created category.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Category"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/categories/{categoryId}": {
+      "parameters": [
+        {"$ref": "#/components/parameters/CategoryId"}
+      ],
+      "get": {
+        "operationId": "getCategory",
+        "tags": ["Categories"],
+        "responses": {
+          "200": {
+            "description": "The category.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Category"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "patch": {
+        "operationId": "updateCategory",
+        "tags": ["Categories"],
+        "requestBody": {"$ref": "#/components/requestBodies/CategoryPatch"},
+        "responses": {
+          "200": {
+            "description": "The updated category.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Category"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteCategory",
+        "tags": ["Categories"],
+        "responses": {
+          "204": {"description": "The category was deleted."},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/categories/{categoryId}/template-versions": {
+      "parameters": [
+        {"$ref": "#/components/parameters/CategoryId"}
+      ],
+      "get": {
+        "operationId": "listTemplateVersions",
+        "tags": ["Templates"],
+        "responses": {
+          "200": {
+            "description": "Template-version history for the category.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/TemplateVersionPage"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "post": {
+        "operationId": "createTemplateDraft",
+        "tags": ["Templates"],
+        "requestBody": {"$ref": "#/components/requestBodies/TemplateDraftCreate"},
+        "responses": {
+          "201": {
+            "description": "The created template draft.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/TemplateVersion"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/template-versions/{versionId}": {
+      "parameters": [
+        {"$ref": "#/components/parameters/VersionId"}
+      ],
+      "get": {
+        "operationId": "getTemplateVersion",
+        "tags": ["Templates"],
+        "responses": {
+          "200": {
+            "description": "The template version and its criteria.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/TemplateVersion"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "patch": {
+        "operationId": "updateTemplateDraft",
+        "tags": ["Templates"],
+        "requestBody": {"$ref": "#/components/requestBodies/TemplatePatch"},
+        "responses": {
+          "200": {
+            "description": "The updated template draft.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/TemplateVersion"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/template-versions/{versionId}/publish": {
+      "parameters": [
+        {"$ref": "#/components/parameters/VersionId"}
+      ],
+      "post": {
+        "operationId": "publishTemplate",
+        "tags": ["Templates"],
+        "requestBody": {"$ref": "#/components/requestBodies/Revision"},
+        "responses": {
+          "200": {
+            "description": "The published template version.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/TemplateVersion"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/entities": {
+      "get": {
+        "operationId": "listEntities",
+        "tags": ["Entities"],
+        "parameters": [
+          {"$ref": "#/components/parameters/CategoryIdQuery"},
+          {"$ref": "#/components/parameters/SearchQuery"},
+          {"$ref": "#/components/parameters/IncludeArchived"},
+          {"$ref": "#/components/parameters/Cursor"},
+          {"$ref": "#/components/parameters/Limit"}
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of entities.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/EntityPage"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "post": {
+        "operationId": "createEntity",
+        "tags": ["Entities"],
+        "requestBody": {"$ref": "#/components/requestBodies/EntityCreate"},
+        "responses": {
+          "201": {
+            "description": "The created entity.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Entity"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/entities/{entityId}": {
+      "parameters": [
+        {"$ref": "#/components/parameters/EntityId"}
+      ],
+      "get": {
+        "operationId": "getEntity",
+        "tags": ["Entities"],
+        "responses": {
+          "200": {
+            "description": "The entity.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Entity"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "patch": {
+        "operationId": "updateEntity",
+        "tags": ["Entities"],
+        "requestBody": {"$ref": "#/components/requestBodies/EntityPatch"},
+        "responses": {
+          "200": {
+            "description": "The updated entity.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Entity"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteEntity",
+        "tags": ["Entities"],
+        "responses": {
+          "204": {"description": "The entity was deleted."},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/entities/{entityId}/reviews": {
+      "parameters": [
+        {"$ref": "#/components/parameters/EntityId"}
+      ],
+      "get": {
+        "operationId": "listReviews",
+        "tags": ["Reviews"],
+        "parameters": [
+          {"$ref": "#/components/parameters/IncludeSuperseded"},
+          {"$ref": "#/components/parameters/Cursor"},
+          {"$ref": "#/components/parameters/Limit"}
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of reviews in descending review-time order.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/ReviewPage"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "post": {
+        "operationId": "createReview",
+        "tags": ["Reviews"],
+        "requestBody": {"$ref": "#/components/requestBodies/ReviewWrite"},
+        "responses": {
+          "201": {
+            "description": "The created review. It is final when finalize=true and otherwise remains a draft.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Review"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/entities/{entityId}/related": {
+      "parameters": [
+        {"$ref": "#/components/parameters/EntityId"}
+      ],
+      "get": {
+        "operationId": "getRelatedEntities",
+        "tags": ["Relations"],
+        "parameters": [
+          {"$ref": "#/components/parameters/RelationTypeIdQuery"},
+          {"$ref": "#/components/parameters/Direction"},
+          {"$ref": "#/components/parameters/MaxDepth"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Related entities discovered by bounded traversal.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/RelatedEntityPage"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/reviews/{reviewId}": {
+      "parameters": [
+        {"$ref": "#/components/parameters/ReviewId"}
+      ],
+      "get": {
+        "operationId": "getReview",
+        "tags": ["Reviews"],
+        "responses": {
+          "200": {
+            "description": "The review and scores under its historical template.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Review"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "patch": {
+        "operationId": "updateReview",
+        "tags": ["Reviews"],
+        "requestBody": {"$ref": "#/components/requestBodies/ReviewMutation"},
+        "responses": {
+          "200": {
+            "description": "The updated review. It is atomically finalized when finalize=true.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Review"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteDraftReview",
+        "tags": ["Reviews"],
+        "parameters": [
+          {"$ref": "#/components/parameters/RevisionQuery"}
+        ],
+        "responses": {
+          "204": {"description": "The review draft was deleted."},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/reviews/{reviewId}/finalize": {
+      "parameters": [
+        {"$ref": "#/components/parameters/ReviewId"}
+      ],
+      "post": {
+        "operationId": "finalizeReview",
+        "tags": ["Reviews"],
+        "requestBody": {"$ref": "#/components/requestBodies/FinalizeReview"},
+        "responses": {
+          "200": {
+            "description": "The finalized review.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Review"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/reviews/{reviewId}/revisions": {
+      "parameters": [
+        {"$ref": "#/components/parameters/ReviewId"}
+      ],
+      "post": {
+        "operationId": "reviseReview",
+        "tags": ["Reviews"],
+        "requestBody": {"$ref": "#/components/requestBodies/ReviewCorrection"},
+        "responses": {
+          "201": {
+            "description": "The final replacement review.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Review"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/comparisons": {
+      "get": {
+        "operationId": "compareEntities",
+        "tags": ["Comparisons"],
+        "parameters": [
+          {"$ref": "#/components/parameters/RequiredCategoryIdQuery"},
+          {"$ref": "#/components/parameters/EntityIds"},
+          {"$ref": "#/components/parameters/Aggregation"},
+          {"$ref": "#/components/parameters/From"},
+          {"$ref": "#/components/parameters/To"},
+          {"$ref": "#/components/parameters/ReviewerIdQuery"}
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested projection for each entity.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Comparison"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/relation-types": {
+      "get": {
+        "operationId": "listRelationTypes",
+        "tags": ["Relations"],
+        "responses": {
+          "200": {
+            "description": "All relation types.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/RelationTypePage"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "post": {
+        "operationId": "createRelationType",
+        "tags": ["Relations"],
+        "requestBody": {"$ref": "#/components/requestBodies/RelationTypeCreate"},
+        "responses": {
+          "201": {
+            "description": "The created relation type.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/RelationType"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/relations": {
+      "get": {
+        "operationId": "listRelations",
+        "tags": ["Relations"],
+        "parameters": [
+          {"$ref": "#/components/parameters/EntityIdQuery"},
+          {"$ref": "#/components/parameters/RelationTypeIdQuery"},
+          {"$ref": "#/components/parameters/Cursor"},
+          {"$ref": "#/components/parameters/Limit"}
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of entity relations.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/RelationPage"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "post": {
+        "operationId": "createRelation",
+        "tags": ["Relations"],
+        "requestBody": {"$ref": "#/components/requestBodies/RelationCreate"},
+        "responses": {
+          "201": {
+            "description": "The created entity relation.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Relation"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/relations/{relationId}": {
+      "parameters": [
+        {"$ref": "#/components/parameters/RelationId"}
+      ],
+      "delete": {
+        "operationId": "deleteRelation",
+        "tags": ["Relations"],
+        "responses": {
+          "204": {"description": "The entity relation was deleted."},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/exports": {
+      "post": {
+        "operationId": "exportData",
+        "tags": ["Portability"],
+        "responses": {
+          "200": {
+            "description": "A versioned portable JSON export.",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {"type": "string"}
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/PortableDocument"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/imports/validate": {
+      "post": {
+        "operationId": "validateImport",
+        "tags": ["Portability"],
+        "requestBody": {"$ref": "#/components/requestBodies/PortableDocument"},
+        "responses": {
+          "200": {
+            "description": "Import validation results. Invalid documents still return 200 with valid=false.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/ImportValidation"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "413": {"$ref": "#/components/responses/PayloadTooLarge"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/imports": {
+      "post": {
+        "operationId": "importData",
+        "tags": ["Portability"],
+        "requestBody": {"$ref": "#/components/requestBodies/PortableDocument"},
+        "responses": {
+          "200": {
+            "description": "The atomic import result.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/ImportResult"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "413": {"$ref": "#/components/responses/PayloadTooLarge"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/access-tokens": {
+      "get": {
+        "operationId": "listAccessTokens",
+        "tags": ["Access tokens"],
+        "responses": {
+          "200": {
+            "description": "All issued access-token records. Secrets are never returned.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/TokenPage"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "post": {
+        "operationId": "issueAccessToken",
+        "tags": ["Access tokens"],
+        "requestBody": {"$ref": "#/components/requestBodies/TokenCreate"},
+        "responses": {
+          "201": {
+            "description": "The issued token. The secret is shown only once.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/IssuedToken"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/access-tokens/{tokenId}/revoke": {
+      "parameters": [
+        {"$ref": "#/components/parameters/TokenId"}
+      ],
+      "post": {
+        "operationId": "revokeAccessToken",
+        "tags": ["Access tokens"],
+        "responses": {
+          "200": {
+            "description": "The revoked token record.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Token"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Use REVIEW_ADMIN_TOKEN or an active revocable API token."
+      },
+      "browserSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "review_engine_session",
+        "description": "Opaque HttpOnly browser session. Unsafe methods additionally require an Origin header that exactly matches REVIEW_PUBLIC_ORIGIN (or the direct request origin in local development)."
+      }
+    },
+    "parameters": {
+      "CategoryId": {
+        "name": "categoryId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "format": "uuid"}
+      },
+      "VersionId": {
+        "name": "versionId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "format": "uuid"}
+      },
+      "EntityId": {
+        "name": "entityId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "format": "uuid"}
+      },
+      "ReviewId": {
+        "name": "reviewId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "format": "uuid"}
+      },
+      "RelationId": {
+        "name": "relationId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "format": "uuid"}
+      },
+      "TokenId": {
+        "name": "tokenId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "format": "uuid"}
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "schema": {"type": "string"},
+        "description": "Opaque cursor returned by the previous page."
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      },
+      "IncludeArchived": {
+        "name": "includeArchived",
+        "in": "query",
+        "required": false,
+        "schema": {"type": "boolean", "default": false}
+      },
+      "IncludeSuperseded": {
+        "name": "includeSuperseded",
+        "in": "query",
+        "required": false,
+        "schema": {"type": "boolean", "default": false}
+      },
+      "CategoryIdQuery": {
+        "name": "categoryId",
+        "in": "query",
+        "required": false,
+        "schema": {"type": "string", "format": "uuid"}
+      },
+      "RequiredCategoryIdQuery": {
+        "name": "categoryId",
+        "in": "query",
+        "required": true,
+        "schema": {"type": "string", "format": "uuid"}
+      },
+      "EntityIdQuery": {
+        "name": "entityId",
+        "in": "query",
+        "required": false,
+        "schema": {"type": "string", "format": "uuid"}
+      },
+      "RelationTypeIdQuery": {
+        "name": "relationTypeId",
+        "in": "query",
+        "required": false,
+        "schema": {"type": "string", "format": "uuid"}
+      },
+      "ReviewerIdQuery": {
+        "name": "reviewerId",
+        "in": "query",
+        "required": false,
+        "schema": {"type": "string", "format": "uuid"}
+      },
+      "SearchQuery": {
+        "name": "query",
+        "in": "query",
+        "required": false,
+        "schema": {"type": "string"}
+      },
+      "EntityIds": {
+        "name": "entityId",
+        "in": "query",
+        "required": false,
+        "style": "form",
+        "explode": true,
+        "schema": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {"type": "string", "format": "uuid"}
+        },
+        "description": "Repeat entityId to compare multiple entities. If omitted, up to 100 active entities are selected."
+      },
+      "Aggregation": {
+        "name": "aggregation",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "enum": ["latest", "mean", "history"],
+          "default": "latest"
+        }
+      },
+      "From": {
+        "name": "from",
+        "in": "query",
+        "required": false,
+        "schema": {"type": "string", "format": "date-time"}
+      },
+      "To": {
+        "name": "to",
+        "in": "query",
+        "required": false,
+        "schema": {"type": "string", "format": "date-time"}
+      },
+      "Direction": {
+        "name": "direction",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "enum": ["outgoing", "incoming", "both"],
+          "default": "both"
+        }
+      },
+      "MaxDepth": {
+        "name": "maxDepth",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5,
+          "default": 1
+        }
+      },
+      "RevisionQuery": {
+        "name": "revision",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "format": "int64",
+          "minimum": 0
+        }
+      }
+    },
+    "requestBodies": {
+      "SessionCreate": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/SessionCreate"}
+          }
+        }
+      },
+      "CategoryCreate": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/CategoryCreate"}
+          }
+        }
+      },
+      "CategoryPatch": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/CategoryPatch"}
+          }
+        }
+      },
+      "TemplateDraftCreate": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/TemplateDraftCreate"}
+          }
+        }
+      },
+      "TemplatePatch": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/TemplatePatch"}
+          }
+        }
+      },
+      "Revision": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Revision"}
+          }
+        }
+      },
+      "EntityCreate": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/EntityCreate"}
+          }
+        }
+      },
+      "EntityPatch": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/EntityPatch"}
+          }
+        }
+      },
+      "ReviewWrite": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/ReviewWrite"}
+          }
+        }
+      },
+      "ReviewMutation": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/ReviewMutation"}
+          }
+        }
+      },
+      "ReviewCorrection": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/ReviewCorrection"}
+          }
+        }
+      },
+      "FinalizeReview": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/FinalizeReview"}
+          }
+        }
+      },
+      "RelationTypeCreate": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/RelationTypeCreate"}
+          }
+        }
+      },
+      "RelationCreate": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/RelationCreate"}
+          }
+        }
+      },
+      "PortableDocument": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/PortableDocument"}
+          }
+        }
+      },
+      "TokenCreate": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/TokenCreate"}
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "The JSON body or request syntax is invalid.",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"}
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "The supplied credential, bearer token, or browser session is not active.",
+        "headers": {
+          "WWW-Authenticate": {
+            "schema": {"type": "string"}
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"}
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "The request body exceeds the configured limit.",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"}
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "A cookie-authenticated unsafe request did not have the required exact Origin.",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"}
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The requested resource does not exist.",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"}
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The request conflicts with resource state or a concurrent update.",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"}
+          }
+        }
+      },
+      "ValidationError": {
+        "description": "The request is syntactically valid but violates an input or domain rule.",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"}
+          }
+        }
+      },
+      "Error": {
+        "description": "A stable machine-readable error response.",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"}
+          }
+        }
+      }
+    },
+    "schemas": {
+      "SessionCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["token"],
+        "properties": {
+          "token": {"type": "string", "minLength": 1, "maxLength": 512, "writeOnly": true}
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message", "details"],
+        "properties": {
+          "code": {"type": "string"},
+          "message": {"type": "string"},
+          "details": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status"],
+        "properties": {
+          "status": {"type": "string", "enum": ["live", "ready", "not-ready"]}
+        }
+      },
+      "Category": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "createdAt", "updatedAt", "revision"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "name": {"type": "string"},
+          "description": {"type": "string"},
+          "activeTemplateVersionId": {"type": "string", "format": "uuid"},
+          "archivedAt": {"type": "string", "format": "date-time"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "updatedAt": {"type": "string", "format": "date-time"},
+          "revision": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "CategoryCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "description": {"type": ["string", "null"]}
+        }
+      },
+      "CategoryPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": ["string", "null"]},
+          "description": {"type": ["string", "null"]},
+          "archived": {"type": ["boolean", "null"]},
+          "revision": {"type": ["integer", "null"], "format": "int64", "minimum": 0}
+        }
+      },
+      "CategorySummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "name": {"type": "string"}
+        }
+      },
+      "CategoryPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/Category"}
+          },
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "Criterion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "criterionId", "name", "minValue", "maxValue", "stepValue", "position", "required"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "criterionId": {"type": "string", "format": "uuid"},
+          "name": {"type": "string"},
+          "description": {"type": "string"},
+          "minValue": {"type": "string"},
+          "maxValue": {"type": "string"},
+          "stepValue": {"type": "string"},
+          "position": {"type": "integer", "minimum": 0},
+          "required": {"type": "boolean"}
+        }
+      },
+      "CriterionWrite": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "maxValue", "stepValue", "position", "required"],
+        "properties": {
+          "id": {"type": ["string", "null"], "format": "uuid"},
+          "criterionId": {"type": ["string", "null"], "format": "uuid"},
+          "name": {"type": "string", "minLength": 1},
+          "description": {"type": ["string", "null"]},
+          "minValue": {"type": "string", "default": "0"},
+          "maxValue": {"type": "string"},
+          "stepValue": {"type": "string"},
+          "position": {"type": "integer", "minimum": 0},
+          "required": {"type": "boolean"}
+        }
+      },
+      "TemplateVersion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "categoryId", "version", "status", "criteria", "createdAt", "updatedAt", "revision"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "categoryId": {"type": "string", "format": "uuid"},
+          "version": {"type": "integer", "minimum": 1},
+          "status": {"type": "string", "enum": ["draft", "published", "retired"]},
+          "criteria": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/Criterion"}
+          },
+          "publishedAt": {"type": "string", "format": "date-time"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "updatedAt": {"type": "string", "format": "date-time"},
+          "revision": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "TemplateVersionPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/TemplateVersion"}
+          },
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "TemplateDraftCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "criteria": {
+            "type": ["array", "null"],
+            "items": {"$ref": "#/components/schemas/CriterionWrite"}
+          }
+        }
+      },
+      "TemplatePatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criteria", "revision"],
+        "properties": {
+          "criteria": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/CriterionWrite"}
+          },
+          "revision": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "Revision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["revision"],
+        "properties": {
+          "revision": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "Entity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "categoryId", "category", "name", "createdAt", "updatedAt", "reviewCount", "revision"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "categoryId": {"type": "string", "format": "uuid"},
+          "category": {"$ref": "#/components/schemas/CategorySummary"},
+          "name": {"type": "string"},
+          "description": {"type": "string"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "updatedAt": {"type": "string", "format": "date-time"},
+          "archivedAt": {"type": "string", "format": "date-time"},
+          "latestReviewedAt": {"type": "string", "format": "date-time"},
+          "reviewCount": {"type": "integer", "format": "int64", "minimum": 0},
+          "revision": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "EntitySummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "categoryId", "name"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "categoryId": {"type": "string"},
+          "name": {"type": "string"}
+        }
+      },
+      "EntityPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/Entity"}
+          },
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "EntityCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["categoryId", "name"],
+        "properties": {
+          "categoryId": {"type": "string", "format": "uuid"},
+          "name": {"type": "string", "minLength": 1},
+          "description": {"type": ["string", "null"]}
+        }
+      },
+      "EntityPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "categoryId": {"type": ["string", "null"], "format": "uuid"},
+          "name": {"type": ["string", "null"]},
+          "description": {"type": ["string", "null"]},
+          "archived": {"type": ["boolean", "null"]},
+          "revision": {"type": ["integer", "null"], "format": "int64", "minimum": 0}
+        }
+      },
+      "ScoreWrite": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterionId", "tickIndex"],
+        "properties": {
+          "criterionId": {"type": "string", "format": "uuid"},
+          "tickIndex": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "Score": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterionId", "criterionName", "tickIndex", "displayValue", "normalizedValue", "minValue", "maxValue", "stepValue"],
+        "properties": {
+          "criterionId": {"type": "string", "format": "uuid"},
+          "criterionName": {"type": "string"},
+          "tickIndex": {"type": "integer", "format": "int64", "minimum": 0},
+          "displayValue": {"type": "string"},
+          "normalizedValue": {"type": "number", "minimum": 0, "maximum": 1},
+          "minValue": {"type": "string"},
+          "maxValue": {"type": "string"},
+          "stepValue": {"type": "string"}
+        }
+      },
+      "ReviewWrite": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reviewedAt"],
+        "properties": {
+          "reviewedAt": {"type": "string", "format": "date-time"},
+          "reviewerId": {"type": ["string", "null"], "format": "uuid"},
+          "scores": {
+            "type": "array",
+            "default": [],
+            "items": {"$ref": "#/components/schemas/ScoreWrite"}
+          },
+          "revision": {"type": ["integer", "null"], "format": "int64", "minimum": 0},
+          "finalize": {"type": "boolean", "default": false}
+        }
+      },
+      "ReviewMutation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reviewedAt", "revision"],
+        "properties": {
+          "reviewedAt": {"type": "string", "format": "date-time"},
+          "reviewerId": {"type": ["string", "null"], "format": "uuid"},
+          "scores": {
+            "type": "array",
+            "default": [],
+            "items": {"$ref": "#/components/schemas/ScoreWrite"}
+          },
+          "revision": {"type": "integer", "format": "int64", "minimum": 0},
+          "finalize": {"type": "boolean", "default": false}
+        }
+      },
+      "ReviewCorrection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reviewedAt", "revision"],
+        "properties": {
+          "reviewedAt": {"type": "string", "format": "date-time"},
+          "reviewerId": {"type": ["string", "null"], "format": "uuid"},
+          "scores": {
+            "type": "array",
+            "default": [],
+            "items": {"$ref": "#/components/schemas/ScoreWrite"}
+          },
+          "revision": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "FinalizeReview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["revision"],
+        "properties": {
+          "revision": {"type": "integer", "format": "int64", "minimum": 0},
+          "scores": {
+            "type": ["array", "null"],
+            "items": {"$ref": "#/components/schemas/ScoreWrite"}
+          }
+        }
+      },
+      "Reviewer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "displayName"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "displayName": {"type": "string"}
+        }
+      },
+      "TemplateSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "version": {"type": "integer", "minimum": 1}
+        }
+      },
+      "Review": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "entityId", "reviewerId", "reviewer", "templateVersionId", "templateVersion", "reviewedAt", "createdAt", "updatedAt", "status", "scores", "revision"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "entityId": {"type": "string", "format": "uuid"},
+          "reviewerId": {"type": "string", "format": "uuid"},
+          "reviewer": {"$ref": "#/components/schemas/Reviewer"},
+          "templateVersionId": {"type": "string", "format": "uuid"},
+          "templateVersion": {"$ref": "#/components/schemas/TemplateSummary"},
+          "reviewedAt": {"type": "string", "format": "date-time"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "updatedAt": {"type": "string", "format": "date-time"},
+          "status": {"type": "string", "enum": ["draft", "final", "superseded"]},
+          "supersedesReviewId": {"type": "string", "format": "uuid"},
+          "scores": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/Score"}
+          },
+          "revision": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "ReviewPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/Review"}
+          },
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "ProjectionCriterion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterionId", "id", "name", "position", "missing", "sampleCount"],
+        "properties": {
+          "criterionId": {"type": "string", "format": "uuid"},
+          "id": {"type": "string", "format": "uuid"},
+          "name": {"type": "string"},
+          "position": {"type": "integer", "minimum": 0},
+          "missing": {"type": "boolean"},
+          "displayValue": {"type": "string"},
+          "normalizedValue": {"type": "number", "minimum": 0, "maximum": 1},
+          "minValue": {"type": "string"},
+          "maxValue": {"type": "string"},
+          "sampleCount": {"type": "integer", "minimum": 0}
+        }
+      },
+      "ComparisonEntity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entityId", "entityName", "entity", "reviewCount", "criteria", "history"],
+        "properties": {
+          "entityId": {"type": "string", "format": "uuid"},
+          "entityName": {"type": "string"},
+          "entity": {"$ref": "#/components/schemas/EntitySummary"},
+          "reviewCount": {"type": "integer", "minimum": 0},
+          "lastReviewedAt": {"type": "string", "format": "date-time"},
+          "criteria": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/ProjectionCriterion"}
+          },
+          "overallNormalizedValue": {"type": "number", "minimum": 0, "maximum": 1},
+          "history": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/Review"}
+          }
+        }
+      },
+      "Comparison": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["categoryId", "aggregation", "criteria", "entities"],
+        "properties": {
+          "categoryId": {"type": "string", "format": "uuid"},
+          "aggregation": {"type": "string", "enum": ["latest", "mean", "history"]},
+          "criteria": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/ProjectionCriterion"}
+          },
+          "entities": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/ComparisonEntity"}
+          }
+        }
+      },
+      "RelationType": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "key", "forwardLabel", "inverseLabel", "hierarchical", "createdAt"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "key": {"type": "string"},
+          "forwardLabel": {"type": "string"},
+          "inverseLabel": {"type": "string"},
+          "hierarchical": {"type": "boolean"},
+          "createdAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "RelationTypeCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "forwardLabel", "inverseLabel"],
+        "properties": {
+          "key": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+          "forwardLabel": {"type": "string", "minLength": 1},
+          "inverseLabel": {"type": "string", "minLength": 1},
+          "hierarchical": {"type": "boolean", "default": false}
+        }
+      },
+      "RelationTypePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/RelationType"}
+          },
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "RelationCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sourceEntityId", "targetEntityId", "relationTypeId"],
+        "properties": {
+          "sourceEntityId": {"type": "string", "format": "uuid"},
+          "targetEntityId": {"type": "string", "format": "uuid"},
+          "relationTypeId": {"type": "string", "format": "uuid"}
+        }
+      },
+      "Relation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sourceEntityId", "targetEntityId", "relationTypeId", "sourceEntity", "targetEntity", "relationType", "createdAt"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "sourceEntityId": {"type": "string", "format": "uuid"},
+          "targetEntityId": {"type": "string", "format": "uuid"},
+          "relationTypeId": {"type": "string", "format": "uuid"},
+          "sourceEntity": {"$ref": "#/components/schemas/EntitySummary"},
+          "targetEntity": {"$ref": "#/components/schemas/EntitySummary"},
+          "relationType": {"$ref": "#/components/schemas/RelationType"},
+          "createdAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "RelationPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/Relation"}
+          },
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "RelatedEntity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entity", "relation", "relationType", "direction", "depth", "path"],
+        "properties": {
+          "entity": {"$ref": "#/components/schemas/EntitySummary"},
+          "relation": {"$ref": "#/components/schemas/Relation"},
+          "relationType": {"$ref": "#/components/schemas/RelationType"},
+          "direction": {"type": "string", "enum": ["outgoing", "incoming"]},
+          "depth": {"type": "integer", "minimum": 1, "maximum": 5},
+          "path": {
+            "type": "array",
+            "items": {"type": "string", "format": "uuid"}
+          }
+        }
+      },
+      "RelatedEntityPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/RelatedEntity"}
+          },
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "PortableDocument": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["format", "formatVersion", "exportedAt", "data"],
+        "properties": {
+          "format": {"type": "string", "const": "review-engine"},
+          "formatVersion": {"type": "string", "const": "1.0"},
+          "exportedAt": {"type": "string", "format": "date-time"},
+          "data": {"$ref": "#/components/schemas/PortableData"}
+        }
+      },
+      "PortableData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["category", "criterion", "template_version", "template_criterion", "entity", "reviewer", "review", "score", "relation_type", "entity_relation"],
+        "properties": {
+          "category": {"$ref": "#/components/schemas/PortableRows"},
+          "criterion": {"$ref": "#/components/schemas/PortableRows"},
+          "template_version": {"$ref": "#/components/schemas/PortableRows"},
+          "template_criterion": {"$ref": "#/components/schemas/PortableRows"},
+          "entity": {"$ref": "#/components/schemas/PortableRows"},
+          "reviewer": {"$ref": "#/components/schemas/PortableRows"},
+          "review": {"$ref": "#/components/schemas/PortableRows"},
+          "score": {"$ref": "#/components/schemas/PortableRows"},
+          "relation_type": {"$ref": "#/components/schemas/PortableRows"},
+          "entity_relation": {"$ref": "#/components/schemas/PortableRows"}
+        }
+      },
+      "PortableRows": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "ImportIssue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "code", "message"],
+        "properties": {
+          "path": {"type": "string"},
+          "code": {"type": "string"},
+          "message": {"type": "string"}
+        }
+      },
+      "ImportValidation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["valid", "errors", "counts", "formatVersion"],
+        "properties": {
+          "valid": {"type": "boolean"},
+          "errors": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/ImportIssue"}
+          },
+          "counts": {
+            "type": "object",
+            "additionalProperties": {"type": "integer", "minimum": 0}
+          },
+          "formatVersion": {"type": "string"}
+        }
+      },
+      "ImportResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["imported", "counts"],
+        "properties": {
+          "imported": {"type": "boolean"},
+          "counts": {
+            "type": "object",
+            "additionalProperties": {"type": "integer", "minimum": 0}
+          }
+        }
+      },
+      "TokenCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1}
+        }
+      },
+      "Token": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "createdAt"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "name": {"type": "string"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "revokedAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "IssuedToken": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["token", "secret"],
+        "properties": {
+          "token": {"$ref": "#/components/schemas/Token"},
+          "secret": {"type": "string", "writeOnly": true}
+        }
+      },
+      "TokenPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/Token"}
+          },
+          "nextCursor": {"type": "string"}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,371 @@
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useApi } from '../api/context';
+import type { Category, Entity, Review, ReviewInput, TemplateVersion } from '../api/types';
+import { ScoreInput } from '../components/ScoreInput';
+import { Badge, Button, Card, Dialog, EmptyState, ErrorPanel, Field, LoadingState, Notice, PageHeader } from '../components/UI';
+import { criterionId, explainError, formatDateTime, formatScore, inputDateTimeToIso, tickDisplay, toLocalDateTimeInput } from '../lib';
+import { en } from '../messages';
+
+export function EntitiesPage() {
+  const { api } = useApi();
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [entities, setEntities] = useState<Entity[]>([]);
+  const [selectedId, setSelectedId] = useState(() => window.sessionStorage.getItem('review-engine.selected-entity') || '');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [queryInput, setQueryInput] = useState('');
+  const [query, setQuery] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [reviewNextCursor, setReviewNextCursor] = useState<string | null | undefined>();
+  const [template, setTemplate] = useState<TemplateVersion | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [loadingMoreReviews, setLoadingMoreReviews] = useState(false);
+  const [error, setError] = useState('');
+  const [detailError, setDetailError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [editingReview, setEditingReview] = useState<Review | null>(null);
+  const [editingTemplate, setEditingTemplate] = useState<TemplateVersion | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+
+  const selected = entities.find((entity) => entity.id === selectedId);
+  const selectedCategory = categories.find((category) => category.id === selected?.categoryId);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError('');
+    Promise.all([
+      api.listAllCategories({ limit: 100 }),
+      api.listAllEntities({ categoryId: categoryFilter || undefined, query: query || undefined, includeArchived: showArchived, limit: 100 }),
+    ]).then(([allCategories, allEntities]) => {
+      if (!active) return;
+      setCategories(allCategories);
+      setEntities(allEntities);
+      setSelectedId((current) => allEntities.some((item) => item.id === current) ? current : allEntities[0]?.id || '');
+    }).catch((cause) => active && setError(explainError(cause))).finally(() => active && setLoading(false));
+    return () => { active = false; };
+  }, [api, categoryFilter, query, showArchived, refreshKey]);
+
+  useEffect(() => {
+    if (!selected) {
+      setReviews([]);
+      setReviewNextCursor(null);
+      setTemplate(null);
+      return;
+    }
+    window.sessionStorage.setItem('review-engine.selected-entity', selected.id);
+    let active = true;
+    setDetailLoading(true);
+    setDetailError('');
+    const category = categories.find((item) => item.id === selected.categoryId);
+    const templatePromise = category?.activeTemplateVersion
+      ? Promise.resolve(category.activeTemplateVersion)
+      : category?.activeTemplateVersionId
+        ? api.getTemplateVersion(category.activeTemplateVersionId)
+        : Promise.resolve(null);
+    Promise.all([
+      api.listReviews(selected.id, { includeSuperseded: true, limit: 50 }),
+      templatePromise,
+    ]).then(([reviewPage, activeTemplate]) => {
+      if (!active) return;
+      setReviews(reviewPage.items);
+      setReviewNextCursor(reviewPage.nextCursor);
+      setTemplate(activeTemplate);
+    }).catch((cause) => active && setDetailError(explainError(cause))).finally(() => active && setDetailLoading(false));
+    return () => { active = false; };
+  }, [api, selected, categories, refreshKey]);
+
+  async function loadMoreReviews() {
+    if (!selected || !reviewNextCursor) return;
+    const entityId = selected.id;
+    setLoadingMoreReviews(true);
+    setDetailError('');
+    try {
+      const page = await api.listReviews(entityId, {
+        includeSuperseded: true,
+        cursor: reviewNextCursor,
+        limit: 50,
+      });
+      if (selectedIdRef.current !== entityId) return;
+      setReviews((items) => {
+        const existing = new Set(items.map((item) => item.id));
+        return [...items, ...page.items.filter((item) => !existing.has(item.id))];
+      });
+      setReviewNextCursor(page.nextCursor);
+    } catch (cause) {
+      if (selectedIdRef.current === entityId) setDetailError(explainError(cause));
+    } finally {
+      setLoadingMoreReviews(false);
+    }
+  }
+
+  async function openReviewEditor(review: Review | null) {
+    setDetailError('');
+    setEditingReview(review);
+    if (!review || review.templateVersionId === template?.id) {
+      setEditingTemplate(template);
+      setReviewOpen(true);
+      return;
+    }
+    setDetailLoading(true);
+    try {
+      setEditingTemplate(await api.getTemplateVersion(review.templateVersionId));
+      setReviewOpen(true);
+    } catch (cause) {
+      setDetailError(explainError(cause));
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  return (
+    <div className="page-stack">
+      <PageHeader
+        eyebrow={en.entities.eyebrow}
+        title={en.entities.title}
+        description={en.entities.description}
+        actions={<Button onClick={() => setCreateOpen(true)} disabled={categories.length === 0}>{en.entities.newEntity}</Button>}
+      />
+      {notice && <Notice tone="success">{notice}</Notice>}
+      {error && <ErrorPanel message={error} onRetry={() => setRefreshKey((value) => value + 1)} />}
+      <Card className="filter-bar">
+        <form onSubmit={(event) => { event.preventDefault(); setQuery(queryInput.trim()); }} role="search">
+          <label className="search-field"><span className="sr-only">{en.entities.searchEntities}</span><span aria-hidden="true">⌕</span><input value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder={en.entities.searchEntities} /><Button variant="secondary" type="submit">{en.common.actions.search}</Button></label>
+          <label><span className="sr-only">{en.entities.filterCategory}</span><select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="">{en.entities.allCategories}</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+          <label className="compact-check"><input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} /> {en.entities.showArchived}</label>
+        </form>
+      </Card>
+
+      {loading ? <LoadingState label={en.entities.loading} /> : categories.length === 0 ? (
+        <Card><EmptyState title={en.entities.setUpCategory} description={en.entities.setUpDescription} action={<a className="button button-primary" href="#/categories">{en.entities.goToCategories}</a>} /></Card>
+      ) : (
+        <div className="workspace-layout entities-layout">
+          <Card className="workspace-sidebar entity-sidebar">
+            <div className="sidebar-heading"><h2>{en.entities.entityCount(entities.length)}</h2></div>
+            {entities.length === 0 ? <EmptyState title={en.entities.noMatches} description={en.entities.noMatchesDescription} action={<Button variant="secondary" onClick={() => setCreateOpen(true)}>{en.entities.addEntity}</Button>} /> : (
+              <>
+                <ul className="selection-list entity-selection-list">
+                  {entities.map((entity) => (
+                    <li key={entity.id}><button className={selectedId === entity.id ? 'selected' : ''} onClick={() => setSelectedId(entity.id)}><span className="entity-monogram" aria-hidden="true">{entity.name.slice(0, 1).toUpperCase()}</span><span><strong>{entity.name}</strong><small>{entity.category?.name || categories.find((item) => item.id === entity.categoryId)?.name}{entity.reviewCount !== undefined ? en.entities.reviewsCount(entity.reviewCount) : ''}</small></span>{entity.archivedAt && <Badge>{en.common.archived}</Badge>}</button></li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </Card>
+
+          <div className="workspace-main">
+            {!selected ? <Card><EmptyState title={en.entities.selectEntity} description={en.entities.selectDescription} /></Card> : (
+              <>
+                <EntitySummary entity={selected} category={selectedCategory} categories={categories} onChanged={(updated, message) => { setEntities((items) => items.map((item) => item.id === updated.id ? updated : item)); setNotice(message); }} onDeleted={() => { setEntities((items) => items.filter((item) => item.id !== selected.id)); setSelectedId(''); setNotice(en.entities.deleted(selected.name)); }} onError={setDetailError} />
+                {detailError && <ErrorPanel message={detailError} onRetry={() => setRefreshKey((value) => value + 1)} />}
+                {detailLoading ? <LoadingState label={en.entities.loadingHistory} /> : (
+                  <Card>
+                    <div className="section-heading timeline-heading">
+                      <div><p className="eyebrow">{en.entities.timeline}</p><h2>{en.entities.reviewHistory}</h2><p>{en.entities.finalObservations(reviews.filter((review) => review.status === 'final').length, Boolean(reviewNextCursor))}</p></div>
+                      <Button onClick={() => void openReviewEditor(null)} disabled={!template || Boolean(selected.archivedAt)}>{template ? en.entities.recordReview : en.entities.publishTemplateFirst}</Button>
+                    </div>
+                    {reviews.length === 0 ? <EmptyState title={en.entities.noReviews} description={en.entities.noReviewsDescription} action={template && !selected.archivedAt && <Button variant="secondary" onClick={() => void openReviewEditor(null)}>{en.entities.recordFirstReview}</Button>} /> : (
+                      <>
+                        <ReviewTimeline reviews={reviews} activeTemplate={template} onEdit={(review) => void openReviewEditor(review)} onDelete={async (review) => {
+                          if (!window.confirm(en.entities.deleteDraftConfirmation)) return;
+                          try { await api.deleteDraftReview(review.id, review.revision); setReviews((items) => items.filter((item) => item.id !== review.id)); setNotice(en.entities.draftDeleted); }
+                          catch (cause) { setDetailError(explainError(cause)); }
+                        }} />
+                        {reviewNextCursor && <Button variant="quiet" className="load-more" onClick={() => void loadMoreReviews()} disabled={loadingMoreReviews}>{loadingMoreReviews ? en.entities.loadingOlder : en.entities.loadOlder}</Button>}
+                      </>
+                    )}
+                  </Card>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      <CreateEntityDialog open={createOpen} categories={categories} initialCategoryId={categoryFilter} onClose={() => setCreateOpen(false)} onCreated={(entity) => {
+        setEntities((items) => [entity, ...items]); setSelectedId(entity.id); setCreateOpen(false); setNotice(en.entities.added(entity.name));
+      }} />
+
+      {selected && editingTemplate && (
+        <ReviewDialog
+          open={reviewOpen}
+          entity={selected}
+          template={editingTemplate}
+          review={editingReview}
+          onClose={() => { setReviewOpen(false); setEditingReview(null); setEditingTemplate(null); }}
+          onSaved={(review, finalized) => {
+            setReviewOpen(false); setEditingReview(null); setEditingTemplate(null); setNotice(finalized ? en.entities.reviewAdded : en.entities.draftSaved); setRefreshKey((value) => value + 1);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CreateEntityDialog({ open, categories, initialCategoryId, onClose, onCreated }: { open: boolean; categories: Category[]; initialCategoryId: string; onClose: () => void; onCreated: (entity: Entity) => void }) {
+  const { api } = useApi();
+  const [categoryId, setCategoryId] = useState(initialCategoryId || categories[0]?.id || '');
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) setCategoryId(initialCategoryId || categories[0]?.id || '');
+  }, [open, initialCategoryId, categories]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!name.trim() || !categoryId) return;
+    setSaving(true); setError('');
+    try {
+      const entity = await api.createEntity({ categoryId, name: name.trim(), description: description.trim() || undefined });
+      setName(''); setDescription(''); onCreated(entity);
+    } catch (cause) { setError(explainError(cause)); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title={en.entities.addTitle} description={en.entities.addDescription} size="small">
+      <form className="form-stack" onSubmit={submit}>
+        {error && <ErrorPanel message={error} />}
+        <Field label={en.entities.category} required><select value={categoryId} onChange={(event) => setCategoryId(event.target.value)} required><option value="" disabled>{en.entities.selectCategory}</option>{categories.filter((item) => !item.archivedAt).map((category) => <option key={category.id} value={category.id}>{category.name}{!category.activeTemplateVersionId ? en.entities.templateNotPublished : ''}</option>)}</select></Field>
+        <Field label={en.entities.name} required><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder={en.entities.namePlaceholder} /></Field>
+        <Field label={en.entities.descriptionLabel}><textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} placeholder={en.entities.descriptionPlaceholder} /></Field>
+        <div className="form-actions"><Button type="button" variant="quiet" onClick={onClose}>{en.common.actions.cancel}</Button><Button type="submit" disabled={saving || !name.trim() || !categoryId}>{saving ? en.entities.adding : en.entities.addEntity}</Button></div>
+      </form>
+    </Dialog>
+  );
+}
+
+function EntitySummary({ entity, category, categories, onChanged, onDeleted, onError }: { entity: Entity; category?: Category; categories: Category[]; onChanged: (entity: Entity, message: string) => void; onDeleted: () => void; onError: (message: string) => void }) {
+  const { api } = useApi();
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(entity.name);
+  const [description, setDescription] = useState(entity.description || '');
+  const [categoryId, setCategoryId] = useState(entity.categoryId);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setName(entity.name); setDescription(entity.description || ''); setCategoryId(entity.categoryId); }, [entity]);
+
+  async function save(event: FormEvent) {
+    event.preventDefault(); setSaving(true);
+    try { const updated = await api.updateEntity(entity.id, { name: name.trim(), description: description.trim(), categoryId, revision: entity.revision }); onChanged(updated, en.entities.detailsSaved); setEditing(false); }
+    catch (cause) { onError(explainError(cause)); } finally { setSaving(false); }
+  }
+  async function toggleArchive() {
+    setSaving(true);
+    try { const updated = await api.updateEntity(entity.id, { archived: !entity.archivedAt, revision: entity.revision }); onChanged(updated, entity.archivedAt ? en.entities.restored : en.entities.archived); }
+    catch (cause) { onError(explainError(cause)); } finally { setSaving(false); }
+  }
+  async function remove() {
+    if (!window.confirm(en.entities.deleteConfirmation(entity.name))) return;
+    setSaving(true);
+    try { await api.deleteEntity(entity.id); onDeleted(); }
+    catch (cause) { onError(explainError(cause)); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <Card className="entity-summary-card">
+      {editing ? <form className="form-stack" onSubmit={save}><h2>{en.entities.editTitle}</h2><div className="form-grid two-column"><Field label={en.entities.name} required><input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label={en.entities.category} hint={(entity.reviewCount ?? 0) > 0 ? en.entities.categoryLocked : en.entities.categoryChangeable}><select value={categoryId} onChange={(event) => setCategoryId(event.target.value)} disabled={(entity.reviewCount ?? 0) > 0}>{categories.filter((item) => !item.archivedAt).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field></div><Field label={en.entities.descriptionLabel}><textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></Field><div className="form-actions"><Button type="button" variant="quiet" onClick={() => setEditing(false)}>{en.common.actions.cancel}</Button><Button type="submit" disabled={!name.trim() || saving}>{en.common.actions.save}</Button></div></form> : (
+        <div className="entity-summary-content">
+          <div className="entity-avatar" aria-hidden="true">{entity.name.slice(0, 2).toUpperCase()}</div>
+          <div className="entity-summary-copy"><p className="eyebrow">{category?.name || entity.category?.name || en.common.entity}</p><div className="title-line"><h2>{entity.name}</h2>{entity.archivedAt && <Badge>{en.common.archived}</Badge>}</div><p>{entity.description || en.common.noDescription}</p><small>{en.entities.updated(formatDateTime(entity.updatedAt))}</small></div>
+          <div className="inline-actions"><Button variant="quiet" onClick={() => setEditing(true)} disabled={Boolean(entity.archivedAt)}>{en.common.actions.edit}</Button><Button variant={entity.archivedAt ? 'secondary' : 'quiet'} onClick={toggleArchive} disabled={saving}>{entity.archivedAt ? en.common.actions.restore : en.common.actions.archive}</Button>{entity.archivedAt && <Button variant="danger" onClick={remove} disabled={saving}>{en.common.actions.delete}</Button>}</div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ReviewTimeline({ reviews, activeTemplate, onEdit, onDelete }: { reviews: Review[]; activeTemplate: TemplateVersion | null; onEdit: (review: Review) => void; onDelete: (review: Review) => void }) {
+  return (
+    <ol className="review-timeline">
+      {reviews.map((review) => {
+        const definition = review.templateVersionId === activeTemplate?.id ? activeTemplate : null;
+        return (
+          <li key={review.id} className={review.status === 'superseded' ? 'superseded' : ''}>
+            <div className="timeline-dot" aria-hidden="true" />
+            <article>
+              <header><div><time dateTime={review.reviewedAt}>{formatDateTime(review.reviewedAt)}</time><span>{en.entities.templateVersion(review.templateVersion?.version ?? definition?.version ?? '?')}</span>{review.reviewer?.displayName && <span>{en.entities.reviewedBy(review.reviewer.displayName)}</span>}</div><Badge tone={review.status === 'final' ? 'success' : review.status === 'draft' ? 'warning' : 'neutral'}>{en.common.status(review.status)}</Badge></header>
+              <div className="review-scores">
+                {review.scores.map((score) => {
+                  const criterion = definition?.criteria.find((item) => criterionId(item) === score.criterionId);
+                  const displayValue = score.displayValue ?? (criterion ? tickDisplay(criterion, score.tickIndex) : score.tickIndex);
+                  return <div key={score.criterionId}><span>{score.criterionName || criterion?.name || en.common.criterion}</span><strong>{formatScore(displayValue)}</strong>{score.normalizedValue !== undefined && <small>{Math.round(score.normalizedValue * 100)}%</small>}</div>;
+                })}
+              </div>
+              {review.status !== 'superseded' && <footer>{review.status === 'draft' && <button className="text-button danger-text" onClick={() => onDelete(review)}>{en.entities.deleteDraft}</button>}<button className="text-button" onClick={() => onEdit(review)}>{review.status === 'draft' ? en.entities.continueDraft : en.entities.correctReview}</button></footer>}
+            </article>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function ReviewDialog({ open, entity, template, review, onClose, onSaved }: { open: boolean; entity: Entity; template: TemplateVersion; review: Review | null; onClose: () => void; onSaved: (review: Review, finalized: boolean) => void }) {
+  const { api } = useApi();
+  const [reviewedAt, setReviewedAt] = useState(toLocalDateTimeInput());
+  const [scores, setScores] = useState<Record<string, number | undefined>>({});
+  const [saving, setSaving] = useState<'draft' | 'final' | ''>('');
+  const [error, setError] = useState('');
+  const isCorrection = review?.status === 'final';
+  const isDraft = review?.status === 'draft';
+
+  useEffect(() => {
+    if (!open) return;
+    setReviewedAt(review ? toLocalDateTimeInput(new Date(review.reviewedAt)) : toLocalDateTimeInput());
+    setScores(Object.fromEntries((review?.scores || []).map((score) => [score.criterionId, score.tickIndex])));
+    setError('');
+  }, [open, review]);
+
+  const missingRequired = template.criteria.filter((criterion) => criterion.required && scores[criterionId(criterion)] === undefined);
+  const payload = (): ReviewInput => ({
+    reviewedAt: inputDateTimeToIso(reviewedAt),
+    scores: template.criteria.flatMap((criterion) => {
+      const id = criterionId(criterion);
+      const tickIndex = scores[id];
+      return tickIndex === undefined ? [] : [{ criterionId: id, tickIndex }];
+    }),
+  });
+
+  async function submit(mode: 'draft' | 'final') {
+    if (mode === 'final' && missingRequired.length) {
+      setError(en.entities.requiredScores(missingRequired.map((item) => item.name).join(', ')));
+      return;
+    }
+    setSaving(mode); setError('');
+    try {
+      if (isCorrection && review) {
+        const saved = await api.reviseReview(review.id, { ...payload(), revision: review.revision });
+        onSaved(saved, true);
+      } else if (isDraft && review) {
+        const updated = await api.updateReview(review.id, { ...payload(), revision: review.revision, finalize: mode === 'final' });
+        onSaved(updated, mode === 'final');
+      } else {
+        const created = await api.createReview(entity.id, { ...payload(), finalize: mode === 'final' });
+        onSaved(created, mode === 'final');
+      }
+    } catch (cause) { setError(explainError(cause)); }
+    finally { setSaving(''); }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title={isCorrection ? en.entities.correctTitle(entity.name) : isDraft ? en.entities.continueTitle(entity.name) : en.entities.reviewTitle(entity.name)} description={isCorrection ? en.entities.correctionDescription : en.entities.usingTemplate(template.version)} size="large">
+      <form className="review-form" onSubmit={(event) => { event.preventDefault(); void submit('final'); }}>
+        {error && <ErrorPanel message={error} />}
+        <div className="review-form-top"><Field label={en.entities.observedAt} required><input type="datetime-local" value={reviewedAt} max="9999-12-31T23:59" onChange={(event) => setReviewedAt(event.target.value)} required /></Field><div className="review-progress"><span>{template.criteria.length - missingRequired.length} / {template.criteria.length}</span><small>{en.entities.criteriaReady}</small></div></div>
+        <div className="score-inputs">
+          {[...template.criteria].sort((a, b) => a.position - b.position).map((criterion) => <ScoreInput key={criterionId(criterion)} criterion={criterion} value={scores[criterionId(criterion)]} onChange={(value) => setScores((items) => ({ ...items, [criterionId(criterion)]: value }))} disabled={Boolean(saving)} />)}
+        </div>
+        <div className="form-actions sticky-actions"><Button type="button" variant="quiet" onClick={onClose}>{en.common.actions.cancel}</Button>{!isCorrection && <Button type="button" variant="secondary" onClick={() => void submit('draft')} disabled={Boolean(saving)}>{saving === 'draft' ? en.categories.saving : en.categories.saveDraft}</Button>}<Button type="submit" disabled={Boolean(saving) || !reviewedAt}>{saving === 'final' ? en.categories.saving : isCorrection ? en.entities.saveCorrection : en.entities.finalizeReview}</Button></div>
+      </form>
+    </Dialog>
+  );
+}

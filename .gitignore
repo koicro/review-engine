@@ -1,0 +1,44 @@
+# Gradle and Kotlin
+.gradle/
+.kotlin/
+build/
+**/build/
+out/
+*.class
+
+# Java tooling
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+
+# JavaScript tooling
+node_modules/
+**/node_modules/
+web/dist/
+*.tsbuildinfo
+
+# Local runtime data
+.env
+.env.*
+!.env.example
+data/
+backups/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Editors and operating systems
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Logs and reports
+*.log
+coverage/
+test-results/
