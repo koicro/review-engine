@@ -35,6 +35,7 @@ COPY --from=backend-build --chown=review-engine:review-engine \
 ENV REVIEW_HTTP_HOST=0.0.0.0 \
     REVIEW_HTTP_PORT=8080 \
     REVIEW_DATABASE_PATH=/data/review-engine.db \
+    REVIEW_PICTURE_PATH=/data/review-pictures \
     REVIEW_UI_ENABLED=true
 
 USER 10001:10001

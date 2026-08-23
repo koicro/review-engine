@@ -46,6 +46,7 @@ function review(id: string, reviewerName: string, hiddenAt: string | null = null
     createdAt: '2026-01-02T00:00:00Z',
     status: 'final',
     hiddenAt,
+    pictures: [],
     scores: [],
     revision,
   };

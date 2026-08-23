@@ -32,7 +32,7 @@ To run the same image without the reference UI:
 REVIEW_UI_ENABLED=false docker compose up --build
 ```
 
-Compose stores the SQLite database in the named `review-engine-data` volume. Running `docker compose down` preserves it; do not add `--volumes` unless the stored data should be deleted.
+Compose stores the SQLite database and review pictures in the named `review-engine-data` volume. Running `docker compose down` preserves it; do not add `--volumes` unless the stored data should be deleted.
 
 ## Local development
 

@@ -6,15 +6,17 @@ Review data belongs to the operator. Keep backups outside the host that runs the
 
 ## Online export
 
-Use the versioned JSON export through the UI or `POST /api/v1/exports` when the application is running. JSON is the portable backup format for moving data between Review Engine installations. Validate an import with `POST /api/v1/imports/validate` before writing it with `POST /api/v1/imports`.
+Use the versioned JSON export through the UI or `POST /api/v1/exports` when the application is running. JSON is the portable format for moving structured review data between Review Engine installations. Validate an import with `POST /api/v1/imports/validate` before writing it with `POST /api/v1/imports`.
 
 Current exports use format version 1.1 and preserve hidden review-history state. The importer also accepts version 1.0 exports; reviews without the 1.1 `hidden_at` field are restored as visible.
+
+JSON exports intentionally exclude review-picture metadata and binary files. To preserve pictures, back up and restore the complete data volume, which contains the SQLite database and the `review-pictures` directory. Do not restore either part independently.
 
 An export is not a substitute for a database backup before a schema upgrade.
 
 ## Consistent SQLite backup
 
-The simplest reliable procedure is to stop the application and archive the complete volume. Copy the database and any `-wal` or `-shm` sidecars together.
+The simplest reliable procedure is to stop the application and archive the complete volume. This captures the database, any `-wal` or `-shm` sidecars, and review pictures together.
 
 ```sh
 mkdir -p backups

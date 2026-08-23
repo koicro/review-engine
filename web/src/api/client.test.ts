@@ -19,6 +19,18 @@ describe('ApiClient', () => {
     })).toBe('?categoryId=cat-1&entityId=entity-1&entityId=entity-2&includeArchived=false');
   });
 
+  it('resolves resource paths against a custom API origin and rejects unsafe URLs', () => {
+    const client = new ApiClient({ baseUrl: 'https://api.example.test/custom/v1' });
+
+    expect(client.resolveResourceUrl('/api/v1/reviews/review-1/pictures/picture-1'))
+      .toBe('https://api.example.test/custom/v1/reviews/review-1/pictures/picture-1');
+    expect(client.resolveResourceUrl('reviews/review-1/pictures/picture-1'))
+      .toBe('https://api.example.test/custom/v1/reviews/review-1/pictures/picture-1');
+    expect(client.resolveResourceUrl('javascript:alert(1)')).toBe('');
+    expect(client.resolveResourceUrl('//attacker.example/picture.jpg')).toBe('');
+    expect(client.resolveResourceUrl('https://attacker.example/picture.jpg')).toBe('');
+  });
+
   it('supports an explicit bearer token for non-browser API clients', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([
       { id: 'cat-1', name: 'Coffee', activeTemplateVersionId: null },
@@ -133,6 +145,40 @@ describe('ApiClient', () => {
       method: 'PATCH',
       body: JSON.stringify({ hidden: true, revision: 4 }),
     }));
+  });
+
+  it('uploads and deletes review pictures with optimistic revisions', async () => {
+    const review = {
+      id: 'review-1',
+      entityId: 'entity-1',
+      templateVersionId: 'template-1',
+      reviewedAt: '2026-01-02T00:00:00Z',
+      createdAt: '2026-01-02T00:00:00Z',
+      status: 'draft',
+      pictures: [],
+      scores: [],
+      revision: 5,
+    };
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(review, { status: 201 }))
+      .mockResolvedValueOnce(jsonResponse({ ...review, revision: 6 }));
+    const client = new ApiClient({ fetchImpl });
+    const first = new File(['first'], 'first.jpg', { type: 'image/jpeg' });
+    const second = new File(['second'], 'second.png', { type: 'image/png' });
+
+    await client.uploadReviewPictures('review-1', [first, second], 4);
+    await client.deleteReviewPicture('review-1', 'picture-1', 5);
+
+    const [uploadUrl, uploadInit] = fetchImpl.mock.calls[0]!;
+    expect(uploadUrl).toBe('/api/v1/reviews/review-1/pictures');
+    expect(uploadInit?.method).toBe('POST');
+    expect(new Headers(uploadInit?.headers).get('content-type')).toBeNull();
+    expect(uploadInit?.body).toBeInstanceOf(FormData);
+    const form = uploadInit?.body as FormData;
+    expect(form.get('revision')).toBe('4');
+    expect(form.getAll('pictures')).toEqual([first, second]);
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('/api/v1/reviews/review-1/pictures/picture-1?revision=5');
+    expect(fetchImpl.mock.calls[1]?.[1]?.method).toBe('DELETE');
   });
 
   it('serializes template scale values as exact decimal strings', async () => {

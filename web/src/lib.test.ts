@@ -21,4 +21,11 @@ describe('explainError', () => {
     expect(explanation).toMatch(/browser session/i);
     expect(explanation).toMatch(/settings/i);
   });
+
+  it('explains the picture upload size limits', () => {
+    const explanation = explainError(new ApiError(413, { code: 'PAYLOAD_TOO_LARGE' }));
+
+    expect(explanation).toMatch(/3 pictures/i);
+    expect(explanation).toMatch(/100 MB/i);
+  });
 });

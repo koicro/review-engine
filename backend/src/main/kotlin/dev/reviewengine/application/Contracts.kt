@@ -5,6 +5,7 @@ import dev.reviewengine.domain.Entity
 import dev.reviewengine.domain.EntityRelation
 import dev.reviewengine.domain.RelationType
 import dev.reviewengine.domain.Review
+import dev.reviewengine.domain.ReviewPicture
 import dev.reviewengine.domain.Scale
 import dev.reviewengine.domain.TemplateCriterion
 import dev.reviewengine.domain.TemplateVersion
@@ -62,6 +63,7 @@ data class ReviewSnapshot(
     val reviewerName: String,
     val templateVersion: Int,
     val scores: List<ScoreSnapshot>,
+    val pictures: List<ReviewPicture> = emptyList(),
 )
 
 enum class Aggregation { LATEST, MEAN, HISTORY }

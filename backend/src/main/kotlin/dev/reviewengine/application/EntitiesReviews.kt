@@ -349,6 +349,7 @@ fun ReviewEngine.reviseReview(id: UUID, write: ReviewWrite): ReviewSnapshot = ma
             ),
             scores,
         )
+        connection.copyReviewPictures(original.id, replacementId)
         connection.prepareStatement(
             """
             UPDATE review SET status = 'superseded', updated_at = ?, lock_version = lock_version + 1
@@ -364,20 +365,25 @@ fun ReviewEngine.reviseReview(id: UUID, write: ReviewWrite): ReviewSnapshot = ma
     }
 }
 
-fun ReviewEngine.deleteDraftReview(id: UUID, expectedLockVersion: Long) = mapSqlConflict {
-    database.write { connection ->
-        val review = connection.review(id)
-        DomainRules.requireReviewEditable(review)
-        if (review.lockVersion != expectedLockVersion) {
-            optimisticConflict("Review", id, expectedLockVersion, review.lockVersion)
+fun ReviewEngine.deleteDraftReview(id: UUID, expectedLockVersion: Long) {
+    var orphanedStorageKeys = emptyList<String>()
+    mapSqlConflict {
+        database.write { connection ->
+            val review = connection.review(id)
+            DomainRules.requireReviewEditable(review)
+            if (review.lockVersion != expectedLockVersion) {
+                optimisticConflict("Review", id, expectedLockVersion, review.lockVersion)
+            }
+            orphanedStorageKeys = connection.deleteOrphanedPictureAssets(id)
+            connection.prepareStatement("DELETE FROM review WHERE id = ? AND status = 'draft' AND lock_version = ?").use { statement ->
+                statement.setString(1, id.toString())
+                statement.setLong(2, expectedLockVersion)
+                if (statement.executeUpdate() != 1) optimisticConflict("Review", id, expectedLockVersion, null)
+            }
+            Unit
         }
-        connection.prepareStatement("DELETE FROM review WHERE id = ? AND status = 'draft' AND lock_version = ?").use { statement ->
-            statement.setString(1, id.toString())
-            statement.setLong(2, expectedLockVersion)
-            if (statement.executeUpdate() != 1) optimisticConflict("Review", id, expectedLockVersion, null)
-        }
-        Unit
     }
+    orphanedStorageKeys.forEach(pictureStorage::delete)
 }
 
 private fun entitySnapshot(connection: Connection, id: UUID): EntitySnapshot = connection.prepareStatement(
@@ -453,7 +459,18 @@ internal fun reviewSnapshot(connection: Connection, review: Review): ReviewSnaps
             }
         }
     }
-    return ReviewSnapshot(review, metadata.first, metadata.second, scores)
+    val pictures = connection.prepareStatement(
+        """
+        SELECT pa.*
+        FROM review_picture rp JOIN picture_asset pa ON pa.id = rp.picture_id
+        WHERE rp.review_id = ?
+        ORDER BY rp.position
+        """.trimIndent(),
+    ).use { statement ->
+        statement.setString(1, review.id.toString())
+        statement.executeQuery().use { result -> buildList { while (result.next()) add(result.toReviewPicture()) } }
+    }
+    return ReviewSnapshot(review, metadata.first, metadata.second, scores, pictures)
 }
 
 private fun requireActiveReviewer(connection: Connection, reviewerId: UUID) {

@@ -103,6 +103,26 @@ export class ApiClient {
     this.onUnauthorized = options.onUnauthorized;
   }
 
+  resolveResourceUrl(value: string): string {
+    const resourcePath = value.trim();
+    if (!resourcePath) return '';
+    try {
+      const browserOrigin = typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
+      const apiBase = new URL(this.baseUrl, browserOrigin);
+      if (apiBase.protocol !== 'http:' && apiBase.protocol !== 'https:') return '';
+      const apiRelativePath = resourcePath.startsWith('/api/v1/')
+        ? resourcePath.slice('/api/v1/'.length)
+        : resourcePath;
+      const resourceUrl = apiRelativePath.startsWith('/')
+        ? new URL(apiRelativePath, apiBase.origin)
+        : new URL(apiRelativePath, `${apiBase.href.replace(/\/$/, '')}/`);
+      if (!['http:', 'https:'].includes(resourceUrl.protocol) || resourceUrl.origin !== apiBase.origin) return '';
+      return resourceUrl.href;
+    } catch {
+      return '';
+    }
+  }
+
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set('Accept', 'application/json');
@@ -290,6 +310,23 @@ export class ApiClient {
       method: 'PATCH',
       body: JSON.stringify(input),
     });
+  }
+
+  uploadReviewPictures(reviewId: Id, pictures: File[], revision: number) {
+    const body = new FormData();
+    body.append('revision', String(revision));
+    pictures.forEach((picture) => body.append('pictures', picture, picture.name));
+    return this.request<Review>(`/reviews/${reviewId}/pictures`, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  deleteReviewPicture(reviewId: Id, pictureId: Id, revision: number) {
+    return this.request<Review>(
+      `/reviews/${reviewId}/pictures/${pictureId}?revision=${encodeURIComponent(revision)}`,
+      { method: 'DELETE' },
+    );
   }
 
   compare(input: {

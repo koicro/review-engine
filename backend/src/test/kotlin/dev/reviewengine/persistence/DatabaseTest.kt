@@ -30,6 +30,8 @@ class DatabaseTest {
                 assertTrue("category" in tables)
                 assertTrue("template_version" in tables)
                 assertTrue("review" in tables)
+                assertTrue("picture_asset" in tables)
+                assertTrue("review_picture" in tables)
                 assertTrue("access_token" in tables)
                 assertTrue("web_session" in tables)
 
@@ -102,7 +104,7 @@ class DatabaseTest {
                             "SELECT group_concat(version, ',') FROM (SELECT version FROM schema_migration ORDER BY version)",
                         ).use { result ->
                             assertTrue(result.next())
-                            assertEquals("1,2", result.getString(1))
+                            assertEquals("1,2,3", result.getString(1))
                         }
                     }
                 }

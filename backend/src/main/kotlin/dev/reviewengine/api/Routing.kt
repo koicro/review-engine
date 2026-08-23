@@ -31,6 +31,8 @@ import dev.reviewengine.application.listRelationTypes
 import dev.reviewengine.application.listRelations
 import dev.reviewengine.application.listReviews
 import dev.reviewengine.application.listTemplateVersions
+import dev.reviewengine.application.MAX_PICTURES_PER_REVIEW
+import dev.reviewengine.application.MAX_PICTURE_SIZE_BYTES
 import dev.reviewengine.application.publishTemplate
 import dev.reviewengine.application.relatedEntities
 import dev.reviewengine.application.reviseReview
@@ -43,12 +45,21 @@ import dev.reviewengine.application.updateReviewVisibility
 import dev.reviewengine.application.updateTemplateDraft
 import dev.reviewengine.application.validateImport
 import dev.reviewengine.application.ReviewEngine
+import dev.reviewengine.application.StagedPicture
+import dev.reviewengine.application.addReviewPictures
+import dev.reviewengine.application.availableReviewPictureSlots
+import dev.reviewengine.application.deleteReviewPicture
+import dev.reviewengine.application.discardPictures
+import dev.reviewengine.application.getReviewPicture
+import dev.reviewengine.application.stagePicture
 import dev.reviewengine.domain.DomainErrorCode
 import dev.reviewengine.domain.DomainException
 import io.ktor.http.ContentDisposition
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.PartData
+import io.ktor.http.content.forEachPart
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.call
@@ -56,15 +67,18 @@ import io.ktor.server.auth.authenticate
 import io.ktor.server.plugins.bodylimit.RequestBodyLimit
 import io.ktor.server.http.content.staticResources
 import io.ktor.server.request.receive
+import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
 import io.ktor.server.response.header
 import io.ktor.server.response.respondText
+import io.ktor.server.response.respondFile
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.ktor.utils.io.readAvailable
 import java.time.Instant
 import java.time.Duration
 import java.util.UUID
@@ -285,6 +299,51 @@ internal fun Application.configureRoutes(engine: ReviewEngine, config: AppConfig
                         val body = call.receive<ReviewVisibilityDto>()
                         call.respond(engine.updateReviewVisibility(call.pathUuid("reviewId"), body.input()).dto())
                     }
+                    route("/pictures") {
+                        install(RequestBodyLimit) {
+                            bodyLimit { PICTURE_UPLOAD_BODY_LIMIT_BYTES }
+                        }
+                        post {
+                            val reviewId = call.pathUuid("reviewId")
+                            val upload = call.receivePictureUpload(engine)
+                            call.respond(
+                                HttpStatusCode.Created,
+                                engine.addReviewPictures(
+                                    reviewId,
+                                    upload.revision,
+                                    upload.pictures,
+                                ).dto(),
+                            )
+                        }
+                        route("/{pictureId}") {
+                            get {
+                                val content = engine.getReviewPicture(
+                                    call.pathUuid("reviewId"),
+                                    call.pathUuid("pictureId"),
+                                )
+                                call.response.header(HttpHeaders.ContentType, content.picture.contentType)
+                                call.response.header(HttpHeaders.ContentLength, content.picture.sizeBytes.toString())
+                                call.response.header(HttpHeaders.CacheControl, "private, no-store")
+                                call.response.header(
+                                    HttpHeaders.ContentDisposition,
+                                    ContentDisposition.Inline.withParameter(
+                                        ContentDisposition.Parameters.FileName,
+                                        content.picture.fileName,
+                                    ).toString(),
+                                )
+                                call.respondFile(content.path.toFile())
+                            }
+                            delete {
+                                call.respond(
+                                    engine.deleteReviewPicture(
+                                        call.pathUuid("reviewId"),
+                                        call.pathUuid("pictureId"),
+                                        call.requiredQueryLong("revision"),
+                                    ).dto(),
+                                )
+                            }
+                        }
+                    }
                 }
 
                 get("/comparisons") {
@@ -423,7 +482,75 @@ private inline fun <reified T : Enum<T>> enumValue(raw: String): T = enumValues<
 
 private fun invalidArgument(message: String): Nothing = throw DomainException(DomainErrorCode.INVALID_ARGUMENT, message)
 
+private data class PictureUploadParts(val revision: Long, val pictures: List<StagedPicture>)
+
+private suspend fun io.ktor.server.application.ApplicationCall.receivePictureUpload(
+    engine: ReviewEngine,
+): PictureUploadParts {
+    var revision: Long? = null
+    var availableSlots: Int? = null
+    val pictures = mutableListOf<StagedPicture>()
+    try {
+        receiveMultipart().forEachPart { part ->
+            try {
+                when (part) {
+                    is PartData.FormItem -> {
+                        if (part.name != "revision" || revision != null) {
+                            invalidArgument("The multipart request must contain one revision field")
+                        }
+                        val parsedRevision = part.value.toLongOrNull()
+                            ?: invalidArgument("revision must be an integer")
+                        revision = parsedRevision
+                        availableSlots = engine.availableReviewPictureSlots(
+                            pathUuid("reviewId"),
+                            parsedRevision,
+                        )
+                    }
+                    is PartData.FileItem -> {
+                        if (part.name != "pictures") {
+                            invalidArgument("File fields must be named pictures")
+                        }
+                        if (
+                            pictures.size >= MAX_PICTURES_PER_REVIEW ||
+                            availableSlots?.let { pictures.size >= it } == true
+                        ) {
+                            throw DomainException(
+                                DomainErrorCode.PICTURE_LIMIT_EXCEEDED,
+                                "A review can contain at most $MAX_PICTURES_PER_REVIEW pictures",
+                                mapOf("maximum" to MAX_PICTURES_PER_REVIEW.toString()),
+                            )
+                        }
+                        pictures += engine.stagePicture(part.originalFileName) { output ->
+                            val channel = part.provider()
+                            val buffer = ByteArray(DEFAULT_UPLOAD_BUFFER_BYTES)
+                            while (true) {
+                                val read = channel.readAvailable(buffer, 0, buffer.size)
+                                if (read == -1) break
+                                if (read > 0) output.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                    else -> invalidArgument("Unsupported multipart field")
+                }
+            } finally {
+                part.release()
+            }
+        }
+        return PictureUploadParts(
+            revision = revision ?: invalidArgument("The multipart revision field is required"),
+            pictures = pictures.takeIf { it.isNotEmpty() }
+                ?: invalidArgument("At least one pictures file is required"),
+        )
+    } catch (failure: Throwable) {
+        engine.discardPictures(pictures)
+        throw failure
+    }
+}
+
 private const val IMPORT_BODY_LIMIT_BYTES: Long = 256L * 1024L * 1024L
+private const val PICTURE_UPLOAD_BODY_LIMIT_BYTES: Long =
+    MAX_PICTURE_SIZE_BYTES * MAX_PICTURES_PER_REVIEW + 1_000_000L
+private const val DEFAULT_UPLOAD_BUFFER_BYTES: Int = 64 * 1024
 private const val SESSION_REQUEST_BODY_LIMIT_BYTES: Long = 8L * 1024L
 private const val SESSION_CREDENTIAL_MAX_CHARS: Int = 512
 private const val SESSION_AUTHENTICATION_FAILURE: String = "The supplied credential is not active"

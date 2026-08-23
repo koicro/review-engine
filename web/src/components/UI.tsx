@@ -136,6 +136,7 @@ export function Dialog({
   description,
   children,
   onClose,
+  closeDisabled = false,
   size = 'medium',
 }: {
   open: boolean;
@@ -143,6 +144,7 @@ export function Dialog({
   description?: string;
   children: ReactNode;
   onClose: () => void;
+  closeDisabled?: boolean;
   size?: 'small' | 'medium' | 'large';
 }) {
   const titleId = useId();
@@ -150,7 +152,9 @@ export function Dialog({
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const onCloseRef = useRef(onClose);
+  const closeDisabledRef = useRef(closeDisabled);
   onCloseRef.current = onClose;
+  closeDisabledRef.current = closeDisabled;
 
   useEffect(() => {
     if (!open) return;
@@ -159,7 +163,7 @@ export function Dialog({
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         event.preventDefault();
-        onCloseRef.current();
+        if (!closeDisabledRef.current) onCloseRef.current();
         return;
       }
       if (event.key !== 'Tab') return;
@@ -200,7 +204,7 @@ export function Dialog({
   if (!open) return null;
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.currentTarget === event.target) onClose();
+      if (!closeDisabled && event.currentTarget === event.target) onClose();
     }}>
       <section
         ref={dialogRef}
@@ -216,7 +220,7 @@ export function Dialog({
             <h2 id={titleId}>{title}</h2>
             {description && <p id={descriptionId}>{description}</p>}
           </div>
-          <button ref={closeRef} className="icon-button" onClick={onClose} aria-label={en.ui.closeDialog}>×</button>
+          <button ref={closeRef} className="icon-button" onClick={onClose} aria-label={en.ui.closeDialog} disabled={closeDisabled}>×</button>
         </header>
         <div className="dialog-body">{children}</div>
       </section>

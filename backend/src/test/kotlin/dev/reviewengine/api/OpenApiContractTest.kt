@@ -29,8 +29,17 @@ class OpenApiContractTest {
             assertNotNull(success, "$key must declare exactly one success response")
             if (success.key != "204") {
                 val content = resolve(success.value).jsonObject["content"]?.jsonObject
-                val schema = content?.get("application/json")?.jsonObject?.get("schema")
-                assertNotNull(schema, "$key success response has no application/json schema")
+                if (key in binaryResponseOperations) {
+                    assertTrue(
+                        content.orEmpty().values.isNotEmpty() && content.orEmpty().values.all { media ->
+                            media.jsonObject["schema"] != null
+                        },
+                        "$key success response has no binary schemas",
+                    )
+                } else {
+                    val schema = content?.get("application/json")?.jsonObject?.get("schema")
+                    assertNotNull(schema, "$key success response has no application/json schema")
+                }
             }
             val defaultResponse = responses["default"]
             assertNotNull(defaultResponse, "$key has no stable default error response")
@@ -85,9 +94,10 @@ class OpenApiContractTest {
             if (requestBody != null) {
                 val resolved = resolve(requestBody).jsonObject
                 assertEquals("true", resolved.getValue("required").jsonPrimitive.content, "$key body must be required")
+                val mediaType = if (key in multipartBodyOperations) "multipart/form-data" else "application/json"
                 assertNotNull(
-                    resolved.getValue("content").jsonObject["application/json"]?.jsonObject?.get("schema"),
-                    "$key has no JSON request schema",
+                    resolved.getValue("content").jsonObject[mediaType]?.jsonObject?.get("schema"),
+                    "$key has no $mediaType request schema",
                 )
             }
         }
@@ -175,6 +185,9 @@ class OpenApiContractTest {
             "POST /reviews/{reviewId}/finalize",
             "POST /reviews/{reviewId}/revisions",
             "PATCH /reviews/{reviewId}/visibility",
+            "POST /reviews/{reviewId}/pictures",
+            "GET /reviews/{reviewId}/pictures/{pictureId}",
+            "DELETE /reviews/{reviewId}/pictures/{pictureId}",
             "GET /comparisons",
             "GET /relation-types",
             "POST /relation-types",
@@ -195,6 +208,7 @@ class OpenApiContractTest {
             "GET /entities/{entityId}/reviews" to setOf("includeSuperseded", "includeHidden", "cursor", "limit"),
             "GET /entities/{entityId}/related" to setOf("relationTypeId", "direction", "maxDepth"),
             "DELETE /reviews/{reviewId}" to setOf("revision"),
+            "DELETE /reviews/{reviewId}/pictures/{pictureId}" to setOf("revision"),
             "GET /comparisons" to setOf("categoryId", "entityId", "aggregation", "from", "to", "reviewerId"),
             "GET /relations" to setOf("entityId", "relationTypeId", "cursor", "limit"),
         )
@@ -213,11 +227,15 @@ class OpenApiContractTest {
             "POST /reviews/{reviewId}/finalize",
             "POST /reviews/{reviewId}/revisions",
             "PATCH /reviews/{reviewId}/visibility",
+            "POST /reviews/{reviewId}/pictures",
             "POST /relation-types",
             "POST /relations",
             "POST /imports/validate",
             "POST /imports",
             "POST /access-tokens",
         )
+
+        val multipartBodyOperations = setOf("POST /reviews/{reviewId}/pictures")
+        val binaryResponseOperations = setOf("GET /reviews/{reviewId}/pictures/{pictureId}")
     }
 }

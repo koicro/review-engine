@@ -25,6 +25,7 @@ import java.util.UUID
 class ReviewEngine(
     internal val database: Database,
     private val clock: Clock = Clock.systemUTC(),
+    internal val pictureStorage: PictureStorage = PictureStorage.default(),
     private val idGenerator: () -> UUID = UUID::randomUUID,
 ) {
     internal fun now(): Instant = clock.instant()

@@ -231,7 +231,8 @@ private fun exportTable(connection: Connection, table: ExportTable): JsonArray =
 
 private fun requireEmptyForImport(connection: Connection) {
     val tableWithData = listOf(
-        "category", "criterion", "template_version", "template_criterion", "entity", "review", "score", "relation_type", "entity_relation",
+        "category", "criterion", "template_version", "template_criterion", "entity", "review", "score",
+        "picture_asset", "review_picture", "relation_type", "entity_relation",
     ).firstOrNull { table ->
         connection.createStatement().use { statement -> statement.executeQuery("SELECT EXISTS(SELECT 1 FROM $table LIMIT 1)").use { it.next(); it.getInt(1) != 0 } }
     }

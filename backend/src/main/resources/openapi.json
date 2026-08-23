@@ -698,6 +698,92 @@
         }
       }
     },
+    "/reviews/{reviewId}/pictures": {
+      "parameters": [
+        {"$ref": "#/components/parameters/ReviewId"}
+      ],
+      "post": {
+        "operationId": "addReviewPictures",
+        "tags": ["Reviews"],
+        "description": "Attach one to three pictures to a draft review. A review can contain at most three pictures; each picture can contain at most 100,000,000 bytes. JPEG, PNG, WebP, and GIF signatures are accepted. The review revision is incremented once for the batch.",
+        "requestBody": {"$ref": "#/components/requestBodies/PictureUpload"},
+        "responses": {
+          "201": {
+            "description": "The updated draft review.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Review"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {
+            "description": "PICTURE_LIMIT_EXCEEDED when the review would contain more than three pictures, or another immutable-state/optimistic-revision conflict.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Error"}
+              }
+            }
+          },
+          "413": {"$ref": "#/components/responses/PayloadTooLarge"},
+          "415": {"$ref": "#/components/responses/UnsupportedMediaType"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/reviews/{reviewId}/pictures/{pictureId}": {
+      "parameters": [
+        {"$ref": "#/components/parameters/ReviewId"},
+        {"$ref": "#/components/parameters/PictureId"}
+      ],
+      "get": {
+        "operationId": "getReviewPicture",
+        "tags": ["Reviews"],
+        "description": "Return picture bytes for a review that references the immutable picture asset.",
+        "responses": {
+          "200": {
+            "description": "The stored picture bytes with the detected media type.",
+            "content": {
+              "image/jpeg": {"schema": {"type": "string", "format": "binary"}},
+              "image/png": {"schema": {"type": "string", "format": "binary"}},
+              "image/webp": {"schema": {"type": "string", "format": "binary"}},
+              "image/gif": {"schema": {"type": "string", "format": "binary"}}
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteReviewPicture",
+        "tags": ["Reviews"],
+        "description": "Remove a picture link from a draft review and delete an unreferenced asset.",
+        "parameters": [
+          {"$ref": "#/components/parameters/RevisionQuery"}
+        ],
+        "responses": {
+          "200": {
+            "description": "The updated draft review.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Review"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/comparisons": {
       "get": {
         "operationId": "compareEntities",
@@ -832,6 +918,7 @@
       "post": {
         "operationId": "exportData",
         "tags": ["Portability"],
+        "description": "Export portable structured review data. Picture metadata and binary files are excluded; back up the complete data volume to preserve pictures.",
         "responses": {
           "200": {
             "description": "A versioned portable JSON export.",
@@ -992,6 +1079,12 @@
       },
       "ReviewId": {
         "name": "reviewId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "format": "uuid"}
+      },
+      "PictureId": {
+        "name": "pictureId",
         "in": "path",
         "required": true,
         "schema": {"type": "string", "format": "uuid"}
@@ -1253,6 +1346,27 @@
           }
         }
       },
+      "PictureUpload": {
+        "required": true,
+        "content": {
+          "multipart/form-data": {
+            "schema": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["revision", "pictures"],
+              "properties": {
+                "revision": {"type": "integer", "format": "int64", "minimum": 0},
+                "pictures": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "items": {"type": "string", "format": "binary", "maxLength": 100000000}
+                }
+              }
+            }
+          }
+        }
+      },
       "RelationTypeCreate": {
         "required": true,
         "content": {
@@ -1309,7 +1423,15 @@
         }
       },
       "PayloadTooLarge": {
-        "description": "The request body exceeds the configured limit.",
+        "description": "PAYLOAD_TOO_LARGE: the request body or one picture exceeds its configured byte limit.",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"}
+          }
+        }
+      },
+      "UnsupportedMediaType": {
+        "description": "UNSUPPORTED_PICTURE_TYPE: a supplied file does not have a supported JPEG, PNG, WebP, or GIF signature.",
         "content": {
           "application/json": {
             "schema": {"$ref": "#/components/schemas/Error"}
@@ -1709,7 +1831,7 @@
       "Review": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "entityId", "reviewerId", "reviewer", "templateVersionId", "templateVersion", "reviewedAt", "createdAt", "updatedAt", "status", "scores", "revision"],
+        "required": ["id", "entityId", "reviewerId", "reviewer", "templateVersionId", "templateVersion", "reviewedAt", "createdAt", "updatedAt", "status", "scores", "pictures", "revision"],
         "properties": {
           "id": {"type": "string", "format": "uuid"},
           "entityId": {"type": "string", "format": "uuid"},
@@ -1727,7 +1849,30 @@
             "type": "array",
             "items": {"$ref": "#/components/schemas/Score"}
           },
+          "pictures": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {"$ref": "#/components/schemas/Picture"}
+          },
           "revision": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "Picture": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "fileName", "contentType", "sizeBytes", "url", "createdAt"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "fileName": {"type": "string", "minLength": 1, "maxLength": 255},
+          "contentType": {"type": "string", "enum": ["image/jpeg", "image/png", "image/webp", "image/gif"]},
+          "sizeBytes": {"type": "integer", "format": "int64", "minimum": 1, "maximum": 100000000},
+          "url": {
+            "type": "string",
+            "format": "uri-reference",
+            "description": "Path relative to the API server base URL.",
+            "example": "reviews/00000000-0000-0000-0000-000000000040/pictures/00000000-0000-0000-0000-000000000050"
+          },
+          "createdAt": {"type": "string", "format": "date-time"}
         }
       },
       "ReviewPage": {

@@ -85,6 +85,15 @@ export interface Reviewer {
   archivedAt?: IsoDateTime | null;
 }
 
+export interface ReviewPicture {
+  id: Id;
+  fileName: string;
+  contentType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+  sizeBytes: number;
+  url: string;
+  createdAt: IsoDateTime;
+}
+
 export interface Review {
   id: Id;
   entityId: Id;
@@ -97,6 +106,7 @@ export interface Review {
   status: ReviewStatus;
   supersedesReviewId?: Id | null;
   hiddenAt?: IsoDateTime | null;
+  pictures: ReviewPicture[];
   scores: Score[];
   revision: number;
 }

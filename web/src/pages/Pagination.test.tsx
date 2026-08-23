@@ -46,6 +46,7 @@ function review(id: string, status: Review['status'], reviewerName: string): Rev
     reviewedAt: status === 'final' ? '2026-01-02T00:00:00Z' : '2026-01-01T00:00:00Z',
     createdAt: '2026-01-01T00:00:00Z',
     status,
+    pictures: [],
     scores: [],
     revision: 0,
   };

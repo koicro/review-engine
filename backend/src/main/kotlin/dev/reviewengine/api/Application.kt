@@ -1,6 +1,7 @@
 package dev.reviewengine.api
 
 import dev.reviewengine.application.ReviewEngine
+import dev.reviewengine.application.PictureStorage
 import dev.reviewengine.application.isBrowserSessionActive
 import dev.reviewengine.application.isStoredTokenActive
 import dev.reviewengine.domain.DomainErrorCode
@@ -32,6 +33,7 @@ import io.ktor.server.response.respond
 import java.io.File
 import java.net.URI
 import java.security.MessageDigest
+import java.nio.file.Path
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import org.slf4j.event.Level
@@ -49,6 +51,8 @@ data class AppConfig(
      * direct request origin, which is intended only for local development.
      */
     val publicOrigin: String? = null,
+    /** Directory containing immutable picture assets referenced by the SQLite database. */
+    val picturePath: String = "./data/review-pictures",
 ) {
     companion object {
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): AppConfig {
@@ -73,6 +77,9 @@ data class AppConfig(
                 publicOrigin = environment["REVIEW_PUBLIC_ORIGIN"]
                     ?.takeIf(String::isNotEmpty)
                     ?.let(::normalizePublicOrigin),
+                picturePath = environment["REVIEW_PICTURE_PATH"]
+                    ?.takeIf(String::isNotBlank)
+                    ?: defaultPicturePath(databasePath),
             )
         }
     }
@@ -88,7 +95,8 @@ internal fun startServer() {
         ?.mkdirs()
     val database = Database(config.jdbcUrl)
     database.migrate()
-    val engine = ReviewEngine(database)
+    val pictureStorage = PictureStorage(Path.of(config.picturePath)).also(PictureStorage::initialize)
+    val engine = ReviewEngine(database, pictureStorage = pictureStorage)
     embeddedServer(Netty, host = config.host, port = config.port) {
         reviewEngineModule(engine, config)
     }.start(wait = true)
@@ -269,7 +277,16 @@ private fun domainStatus(code: DomainErrorCode): HttpStatusCode = when (code) {
     DomainErrorCode.IMMUTABLE_RESOURCE,
     DomainErrorCode.INVALID_STATE_TRANSITION,
     DomainErrorCode.HIERARCHY_CYCLE,
+    DomainErrorCode.PICTURE_LIMIT_EXCEEDED,
     -> HttpStatusCode.Conflict
     DomainErrorCode.UNAUTHORIZED -> HttpStatusCode.Unauthorized
+    DomainErrorCode.PAYLOAD_TOO_LARGE -> HttpStatusCode.PayloadTooLarge
+    DomainErrorCode.UNSUPPORTED_PICTURE_TYPE -> HttpStatusCode.UnsupportedMediaType
     else -> HttpStatusCode.UnprocessableEntity
+}
+
+private fun defaultPicturePath(databasePath: String): String {
+    val path = databasePath.removePrefix("jdbc:sqlite:")
+    if (path.startsWith(":memory:") || path.startsWith("file:")) return "./data/review-pictures"
+    return File(path).absoluteFile.parentFile.resolve("review-pictures").path
 }

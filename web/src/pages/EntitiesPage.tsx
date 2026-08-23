@@ -1,10 +1,28 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { useApi } from '../api/context';
-import type { Category, Entity, Review, ReviewInput, TemplateVersion } from '../api/types';
+import type { Category, Entity, Review, ReviewInput, ReviewPicture, TemplateVersion } from '../api/types';
 import { ScoreInput } from '../components/ScoreInput';
 import { Badge, Button, Card, Dialog, EmptyState, ErrorPanel, Field, LoadingState, Notice, PageHeader } from '../components/UI';
 import { criterionId, explainError, formatDateTime, formatScore, inputDateTimeToIso, tickDisplay, toLocalDateTimeInput } from '../lib';
 import { en } from '../messages';
+
+export const MAX_REVIEW_PICTURES = 3;
+export const MAX_REVIEW_PICTURE_BYTES = 100_000_000;
+
+const supportedPictureTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const supportedPictureExtension = /\.(?:jpe?g|png|webp|gif)$/i;
+
+interface PendingPicture {
+  id: string;
+  file: File;
+  previewUrl: string;
+}
+
+function formatFileSize(sizeBytes: number): string {
+  if (sizeBytes < 1_000_000) return `${Math.max(1, Math.round(sizeBytes / 1_000))} KB`;
+  const megabytes = sizeBytes / 1_000_000;
+  return `${megabytes >= 10 ? Math.round(megabytes) : megabytes.toFixed(1)} MB`;
+}
 
 export function EntitiesPage() {
   const { api } = useApi();
@@ -230,7 +248,7 @@ export function EntitiesPage() {
           entity={selected}
           template={editingTemplate}
           review={editingReview}
-          onClose={() => { setReviewOpen(false); setEditingReview(null); setEditingTemplate(null); }}
+          onClose={(changed) => { setReviewOpen(false); setEditingReview(null); setEditingTemplate(null); if (changed) setRefreshKey((value) => value + 1); }}
           onSaved={(review, finalized) => {
             setReviewOpen(false); setEditingReview(null); setEditingTemplate(null); setNotice(finalized ? en.entities.reviewAdded : en.entities.draftSaved); setRefreshKey((value) => value + 1);
           }}
@@ -335,6 +353,7 @@ function ReviewTimeline({ reviews, activeTemplate, visibilityChangingReviewId, o
                   return <div key={score.criterionId}><span>{score.criterionName || criterion?.name || en.common.criterion}</span><strong>{formatScore(displayValue)}</strong>{score.normalizedValue !== undefined && <small>{Math.round(score.normalizedValue * 100)}%</small>}</div>;
                 })}
               </div>
+              {review.pictures?.length > 0 && <ReviewPictureGallery pictures={review.pictures} />}
               <footer>{review.status === 'draft' ? <><button className="text-button danger-text" onClick={() => onDelete(review)}>{en.entities.deleteDraft}</button><button className="text-button" onClick={() => onEdit(review)}>{en.entities.continueDraft}</button></> : <><button className={hidden ? 'text-button' : 'text-button danger-text'} disabled={visibilityChangingReviewId === review.id} onClick={() => onVisibilityChange(review, !hidden)}>{hidden ? en.entities.restoreReview : en.entities.hideReview}</button>{review.status === 'final' && !hidden && <button className="text-button" onClick={() => onEdit(review)}>{en.entities.correctReview}</button>}</>}</footer>
             </article>
           </li>
@@ -344,23 +363,66 @@ function ReviewTimeline({ reviews, activeTemplate, visibilityChangingReviewId, o
   );
 }
 
-function ReviewDialog({ open, entity, template, review, onClose, onSaved }: { open: boolean; entity: Entity; template: TemplateVersion; review: Review | null; onClose: () => void; onSaved: (review: Review, finalized: boolean) => void }) {
+function ReviewPictureGallery({ pictures }: { pictures: ReviewPicture[] }) {
   const { api } = useApi();
+  return (
+    <ul className="review-picture-grid" aria-label={en.entities.pictures}>
+      {pictures.map((picture) => {
+        const pictureUrl = api.resolveResourceUrl(picture.url);
+        return (
+          <li key={picture.id}>
+            {pictureUrl ? (
+              <a href={pictureUrl} target="_blank" rel="noreferrer" aria-label={en.entities.openPicture(picture.fileName)}>
+                <img src={pictureUrl} alt={picture.fileName} loading="lazy" decoding="async" />
+                <span><strong>{picture.fileName}</strong><small>{formatFileSize(picture.sizeBytes)}</small></span>
+              </a>
+            ) : <span><strong>{picture.fileName}</strong><small>{formatFileSize(picture.sizeBytes)}</small></span>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function ReviewDialog({ open, entity, template, review, onClose, onSaved }: { open: boolean; entity: Entity; template: TemplateVersion; review: Review | null; onClose: (changed: boolean) => void; onSaved: (review: Review, finalized: boolean) => void }) {
+  const { api } = useApi();
+  const pictureInputId = useId();
   const [reviewedAt, setReviewedAt] = useState(toLocalDateTimeInput());
   const [scores, setScores] = useState<Record<string, number | undefined>>({});
+  const [workingReview, setWorkingReview] = useState<Review | null>(review);
+  const [selectedPictures, setSelectedPictures] = useState<PendingPicture[]>([]);
+  const [removedPictureIds, setRemovedPictureIds] = useState<Set<string>>(new Set());
+  const [pictureError, setPictureError] = useState('');
   const [saving, setSaving] = useState<'draft' | 'final' | ''>('');
   const [error, setError] = useState('');
+  const previewUrlsRef = useRef(new Set<string>());
+  const pictureSequenceRef = useRef(0);
   const isCorrection = review?.status === 'final';
   const isDraft = review?.status === 'draft';
 
   useEffect(() => {
     if (!open) return;
+    previewUrlsRef.current.forEach((url) => URL.revokeObjectURL?.(url));
+    previewUrlsRef.current.clear();
     setReviewedAt(review ? toLocalDateTimeInput(new Date(review.reviewedAt)) : toLocalDateTimeInput());
     setScores(Object.fromEntries((review?.scores || []).map((score) => [score.criterionId, score.tickIndex])));
+    setWorkingReview(review);
+    setSelectedPictures([]);
+    setRemovedPictureIds(new Set());
+    setPictureError('');
     setError('');
   }, [open, review]);
 
+  useEffect(() => () => {
+    previewUrlsRef.current.forEach((url) => URL.revokeObjectURL?.(url));
+    previewUrlsRef.current.clear();
+  }, []);
+
   const missingRequired = template.criteria.filter((criterion) => criterion.required && scores[criterionId(criterion)] === undefined);
+  const persistedPictures = workingReview?.pictures ?? review?.pictures ?? [];
+  const visiblePersistedPictures = persistedPictures.filter((picture) => !removedPictureIds.has(picture.id));
+  const pictureCount = visiblePersistedPictures.length + selectedPictures.length;
+  const persistedDuringDialog = Boolean(workingReview && (!review || workingReview.revision !== review.revision));
   const payload = (): ReviewInput => ({
     reviewedAt: inputDateTimeToIso(reviewedAt),
     scores: template.criteria.flatMap((criterion) => {
@@ -370,6 +432,65 @@ function ReviewDialog({ open, entity, template, review, onClose, onSaved }: { op
     }),
   });
 
+  function selectPictures(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = '';
+    let remaining = MAX_REVIEW_PICTURES - pictureCount;
+    let validationError = '';
+    const additions: PendingPicture[] = [];
+
+    for (const file of files) {
+      if (file.size === 0) {
+        validationError ||= en.entities.pictureEmpty(file.name);
+        continue;
+      }
+      const reportedType = file.type.toLowerCase();
+      if (!supportedPictureTypes.has(reportedType) && (reportedType !== '' || !supportedPictureExtension.test(file.name))) {
+        validationError ||= en.entities.pictureTypeInvalid(file.name);
+        continue;
+      }
+      if (file.size > MAX_REVIEW_PICTURE_BYTES) {
+        validationError ||= en.entities.pictureTooLarge(file.name);
+        continue;
+      }
+      if (remaining <= 0) {
+        validationError ||= en.entities.pictureLimitReached;
+        continue;
+      }
+      const previewUrl = typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : '';
+      if (previewUrl) previewUrlsRef.current.add(previewUrl);
+      additions.push({ id: `pending-picture-${++pictureSequenceRef.current}`, file, previewUrl });
+      remaining -= 1;
+    }
+
+    if (additions.length) setSelectedPictures((current) => [...current, ...additions]);
+    setPictureError(validationError);
+  }
+
+  function removeSelectedPicture(picture: PendingPicture) {
+    if (picture.previewUrl) {
+      URL.revokeObjectURL?.(picture.previewUrl);
+      previewUrlsRef.current.delete(picture.previewUrl);
+    }
+    setSelectedPictures((current) => current.filter((item) => item.id !== picture.id));
+    setPictureError('');
+  }
+
+  function clearUploadedPictures(uploaded: PendingPicture[]) {
+    const uploadedIds = new Set(uploaded.map((picture) => picture.id));
+    uploaded.forEach((picture) => {
+      if (picture.previewUrl) {
+        URL.revokeObjectURL?.(picture.previewUrl);
+        previewUrlsRef.current.delete(picture.previewUrl);
+      }
+    });
+    setSelectedPictures((current) => current.filter((picture) => !uploadedIds.has(picture.id)));
+  }
+
+  function closeDialog() {
+    if (!saving) onClose(persistedDuringDialog);
+  }
+
   async function submit(mode: 'draft' | 'final') {
     if (mode === 'final' && missingRequired.length) {
       setError(en.entities.requiredScores(missingRequired.map((item) => item.name).join(', ')));
@@ -377,29 +498,100 @@ function ReviewDialog({ open, entity, template, review, onClose, onSaved }: { op
     }
     setSaving(mode); setError('');
     try {
+      const input = payload();
       if (isCorrection && review) {
-        const saved = await api.reviseReview(review.id, { ...payload(), revision: review.revision });
+        const saved = await api.reviseReview(review.id, { ...input, revision: review.revision });
         onSaved(saved, true);
-      } else if (isDraft && review) {
-        const updated = await api.updateReview(review.id, { ...payload(), revision: review.revision, finalize: mode === 'final' });
-        onSaved(updated, mode === 'final');
-      } else {
-        const created = await api.createReview(entity.id, { ...payload(), finalize: mode === 'final' });
-        onSaved(created, mode === 'final');
+        return;
       }
+
+      const hasPictureChanges = selectedPictures.length > 0 || removedPictureIds.size > 0;
+      let current = workingReview;
+      if (!hasPictureChanges) {
+        const saved = current
+          ? await api.updateReview(current.id, { ...input, revision: current.revision, finalize: mode === 'final' })
+          : await api.createReview(entity.id, { ...input, finalize: mode === 'final' });
+        onSaved(saved, mode === 'final');
+        return;
+      }
+
+      current = current
+        ? await api.updateReview(current.id, { ...input, revision: current.revision, finalize: false })
+        : await api.createReview(entity.id, { ...input, finalize: false });
+      setWorkingReview(current);
+
+      for (const pictureId of removedPictureIds) {
+        current = await api.deleteReviewPicture(current.id, pictureId, current.revision);
+        setWorkingReview(current);
+        setRemovedPictureIds((ids) => {
+          const next = new Set(ids);
+          next.delete(pictureId);
+          return next;
+        });
+      }
+
+      if (selectedPictures.length) {
+        const uploaded = selectedPictures;
+        current = await api.uploadReviewPictures(current.id, uploaded.map((picture) => picture.file), current.revision);
+        setWorkingReview(current);
+        clearUploadedPictures(uploaded);
+      }
+
+      if (mode === 'final') {
+        current = await api.finalizeReview(current.id, { scores: input.scores, revision: current.revision });
+      }
+      onSaved(current, mode === 'final');
     } catch (cause) { setError(explainError(cause)); }
     finally { setSaving(''); }
   }
 
   return (
-    <Dialog open={open} onClose={onClose} title={isCorrection ? en.entities.correctTitle(entity.name) : isDraft ? en.entities.continueTitle(entity.name) : en.entities.reviewTitle(entity.name)} description={isCorrection ? en.entities.correctionDescription : en.entities.usingTemplate(template.version)} size="large">
-      <form className="review-form" onSubmit={(event) => { event.preventDefault(); void submit('final'); }}>
+    <Dialog open={open} onClose={closeDialog} closeDisabled={Boolean(saving)} title={isCorrection ? en.entities.correctTitle(entity.name) : isDraft ? en.entities.continueTitle(entity.name) : en.entities.reviewTitle(entity.name)} description={isCorrection ? en.entities.correctionDescription : en.entities.usingTemplate(template.version)} size="large">
+      <form className="review-form" aria-busy={Boolean(saving)} onSubmit={(event) => { event.preventDefault(); void submit('final'); }}>
         {error && <ErrorPanel message={error} />}
-        <div className="review-form-top"><Field label={en.entities.observedAt} required><input type="datetime-local" value={reviewedAt} max="9999-12-31T23:59" onChange={(event) => setReviewedAt(event.target.value)} required /></Field><div className="review-progress"><span>{template.criteria.length - missingRequired.length} / {template.criteria.length}</span><small>{en.entities.criteriaReady}</small></div></div>
+        <div className="review-form-top"><Field label={en.entities.observedAt} required><input type="datetime-local" value={reviewedAt} max="9999-12-31T23:59" onChange={(event) => setReviewedAt(event.target.value)} disabled={Boolean(saving)} required /></Field><div className="review-progress"><span>{template.criteria.length - missingRequired.length} / {template.criteria.length}</span><small>{en.entities.criteriaReady}</small></div></div>
         <div className="score-inputs">
           {[...template.criteria].sort((a, b) => a.position - b.position).map((criterion) => <ScoreInput key={criterionId(criterion)} criterion={criterion} value={scores[criterionId(criterion)]} onChange={(value) => setScores((items) => ({ ...items, [criterionId(criterion)]: value }))} disabled={Boolean(saving)} />)}
         </div>
-        <div className="form-actions sticky-actions"><Button type="button" variant="quiet" onClick={onClose}>{en.common.actions.cancel}</Button>{!isCorrection && <Button type="button" variant="secondary" onClick={() => void submit('draft')} disabled={Boolean(saving)}>{saving === 'draft' ? en.categories.saving : en.categories.saveDraft}</Button>}<Button type="submit" disabled={Boolean(saving) || !reviewedAt}>{saving === 'final' ? en.categories.saving : isCorrection ? en.entities.saveCorrection : en.entities.finalizeReview}</Button></div>
+        {isCorrection ? persistedPictures.length > 0 && (
+          <section className="review-picture-editor" aria-labelledby={`${pictureInputId}-heading`}>
+            <div className="picture-editor-heading"><div><h3 id={`${pictureInputId}-heading`}>{en.entities.pictures}</h3><p>{en.entities.picturesInherited}</p></div><span>{en.entities.pictureCount(persistedPictures.length)}</span></div>
+            <ReviewPictureGallery pictures={persistedPictures} />
+          </section>
+        ) : (
+          <section className="review-picture-editor" aria-labelledby={`${pictureInputId}-heading`}>
+            <div className="picture-editor-heading"><div><h3 id={`${pictureInputId}-heading`}>{en.entities.pictures}</h3><p id={`${pictureInputId}-hint`}>{en.entities.picturesHint}</p></div><span aria-live="polite">{en.entities.pictureCount(pictureCount)}</span></div>
+            {(visiblePersistedPictures.length > 0 || selectedPictures.length > 0) && (
+              <ul className="review-picture-grid editable-picture-grid">
+                {visiblePersistedPictures.map((picture) => {
+                  const pictureUrl = api.resolveResourceUrl(picture.url);
+                  return (
+                    <li key={picture.id}>
+                      {pictureUrl ? <a href={pictureUrl} target="_blank" rel="noreferrer" aria-label={en.entities.openPicture(picture.fileName)}><img src={pictureUrl} alt={picture.fileName} loading="lazy" decoding="async" /></a> : <span className="picture-placeholder" aria-hidden="true">IMG</span>}
+                      <span><strong>{picture.fileName}</strong><small>{formatFileSize(picture.sizeBytes)}</small></span>
+                      <button type="button" className="icon-button danger" aria-label={en.entities.removePicture(picture.fileName)} disabled={Boolean(saving)} onClick={() => { setRemovedPictureIds((ids) => new Set(ids).add(picture.id)); setPictureError(''); }}>×</button>
+                    </li>
+                  );
+                })}
+                {selectedPictures.map((picture) => (
+                  <li key={picture.id}>
+                    {picture.previewUrl ? <img src={picture.previewUrl} alt={picture.file.name} decoding="async" /> : <span className="picture-placeholder" aria-hidden="true">IMG</span>}
+                    <span><strong>{picture.file.name}</strong><small>{formatFileSize(picture.file.size)}</small></span>
+                    <button type="button" className="icon-button danger" aria-label={en.entities.removePicture(picture.file.name)} disabled={Boolean(saving)} onClick={() => removeSelectedPicture(picture)}>×</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="picture-picker-row">
+              <label className={`button button-secondary picture-picker ${pictureCount >= MAX_REVIEW_PICTURES || saving ? 'disabled' : ''}`} htmlFor={pictureInputId}>
+                {en.entities.choosePictures}
+              </label>
+              <input id={pictureInputId} className="sr-only" type="file" accept=".jpg,.jpeg,.png,.webp,.gif,image/jpeg,image/png,image/webp,image/gif" multiple aria-describedby={`${pictureInputId}-hint`} disabled={pictureCount >= MAX_REVIEW_PICTURES || Boolean(saving)} onChange={selectPictures} />
+            </div>
+            {pictureError && <p className="picture-error" role="alert">{pictureError}</p>}
+          </section>
+        )}
+        <div className="form-actions sticky-actions"><Button type="button" variant="quiet" onClick={closeDialog} disabled={Boolean(saving)}>{en.common.actions.cancel}</Button>{!isCorrection && <Button type="button" variant="secondary" onClick={() => void submit('draft')} disabled={Boolean(saving)}>{saving === 'draft' ? en.categories.saving : en.categories.saveDraft}</Button>}<Button type="submit" disabled={Boolean(saving) || !reviewedAt}>{saving === 'final' ? en.categories.saving : isCorrection ? en.entities.saveCorrection : en.entities.finalizeReview}</Button></div>
       </form>
     </Dialog>
   );

@@ -118,6 +118,15 @@ data class Review(
     val hiddenAt: Instant? = null,
 )
 
+data class ReviewPicture(
+    val id: UUID,
+    val fileName: String,
+    val contentType: String,
+    val sizeBytes: Long,
+    val storageKey: String,
+    val createdAt: Instant,
+)
+
 data class Score(
     val reviewId: UUID,
     val criterionId: UUID,

@@ -9,6 +9,7 @@ The supported deployment unit is the OCI image. It contains the API, database mi
 | `REVIEW_HTTP_HOST` | `0.0.0.0` | Interface bound inside the container |
 | `REVIEW_HTTP_PORT` | `8080` | Port bound inside the container |
 | `REVIEW_DATABASE_PATH` | `/data/review-engine.db` | SQLite database path |
+| `REVIEW_PICTURE_PATH` | `review-pictures` beside the database | Directory for immutable review-picture assets |
 | `REVIEW_UI_ENABLED` | `true` | Set to `false` for the headless API configuration |
 | `REVIEW_ADMIN_TOKEN` | none in the image | Token used for administrative and write operations |
 | `REVIEW_PUBLIC_ORIGIN` | direct request origin | Browser-facing HTTP(S) origin, without a path; required behind TLS or a reverse proxy |
@@ -17,7 +18,7 @@ The Compose file requires an explicit administrator token and binds the publishe
 
 ## Persistent storage
 
-Mount a persistent volume at `/data`. The application container otherwise runs with a read-only root filesystem and only needs a small writable `/tmp`. That temporary filesystem must permit executable mappings because `sqlite-jdbc` extracts its ephemeral, architecture-specific JNI library there. The supplied Compose configuration keeps the mount size-bounded with `nosuid` and `nodev` while allowing that mapping. The process writes structured logs to standard output.
+Mount a persistent volume at `/data`. It contains both the SQLite database and review pictures, which default to `/data/review-pictures` in the packaged image. Treat that complete volume as one backup unit: database metadata without its matching picture directory is incomplete. The application container otherwise runs with a read-only root filesystem and only needs a small writable `/tmp`. That temporary filesystem must permit executable mappings because `sqlite-jdbc` extracts its ephemeral, architecture-specific JNI library there. The supplied Compose configuration keeps the mount size-bounded with `nosuid` and `nodev` while allowing that mapping. The process writes structured logs to standard output.
 
 SQLite works best when `/data` is backed by a local filesystem. Avoid network filesystems whose locking semantics are not explicitly compatible with SQLite. Run one application replica against a database file.
 

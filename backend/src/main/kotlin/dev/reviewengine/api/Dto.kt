@@ -222,7 +222,18 @@ data class ReviewDto(
     val hiddenAt: String? = null,
     val supersedesReviewId: String? = null,
     val scores: List<ScoreDto>,
+    val pictures: List<PictureDto> = emptyList(),
     val revision: Long,
+)
+
+@Serializable
+data class PictureDto(
+    val id: String,
+    val fileName: String,
+    val contentType: String,
+    val sizeBytes: Long,
+    val url: String,
+    val createdAt: String,
 )
 
 @Serializable
@@ -374,6 +385,15 @@ internal fun ReviewSnapshot.dto() = ReviewDto(
         ScoreDto(
             score.criterionId.toString(), score.criterionName, score.tickIndex, score.displayValue,
             score.normalizedValue.toDouble(), score.minValue, score.maxValue, score.stepValue,
+        )
+    }, pictures.map { picture ->
+        PictureDto(
+            id = picture.id.toString(),
+            fileName = picture.fileName,
+            contentType = picture.contentType,
+            sizeBytes = picture.sizeBytes,
+            url = "reviews/${review.id}/pictures/${picture.id}",
+            createdAt = picture.createdAt.toString(),
         )
     }, review.lockVersion,
 )
