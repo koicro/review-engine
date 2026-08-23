@@ -93,10 +93,7 @@ export function CategoriesPage() {
     if (!selected) return;
     setActionError('');
     try {
-      const draft = await api.createTemplateDraft(
-        selected.id,
-        selected.activeTemplateVersionId ? undefined : [freshCriterion(0)],
-      );
+      const draft = await api.createTemplateDraft(selected.id);
       setVersions((items) => [draft, ...items]);
       setSelectedVersionId(draft.id);
       setNotice(en.categories.draftCreated(draft.version));

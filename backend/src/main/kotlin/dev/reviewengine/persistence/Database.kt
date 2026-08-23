@@ -127,6 +127,7 @@ class Database(jdbcUrl: String) : AutoCloseable {
     private companion object {
         val migrations = listOf(
             Migration(1, "initial schema", "/db/migration/V001__initial_schema.sql"),
+            Migration(2, "review visibility", "/db/migration/V002__review_visibility.sql"),
         )
 
         /** Splits ordinary migration SQL while respecting quoted strings and SQL comments. */

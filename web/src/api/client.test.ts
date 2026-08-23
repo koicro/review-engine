@@ -108,6 +108,33 @@ describe('ApiClient', () => {
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v1/comparisons?categoryId=cat-1&entityId=one&entityId=two&aggregation=mean');
   });
 
+  it('requests hidden review history and sends visibility revisions', async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ items: [], nextCursor: null }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: 'review-1',
+        entityId: 'entity-1',
+        templateVersionId: 'template-1',
+        reviewedAt: '2026-01-02T00:00:00Z',
+        createdAt: '2026-01-02T00:00:00Z',
+        status: 'final',
+        hiddenAt: '2026-01-03T00:00:00Z',
+        scores: [],
+        revision: 5,
+      }));
+    const client = new ApiClient({ fetchImpl });
+
+    await client.listReviews('entity-1', { includeSuperseded: true, includeHidden: true, limit: 50 });
+    await client.updateReviewVisibility('review-1', { hidden: true, revision: 4 });
+
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v1/entities/entity-1/reviews?includeSuperseded=true&includeHidden=true&limit=50');
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('/api/v1/reviews/review-1/visibility');
+    expect(fetchImpl.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ hidden: true, revision: 4 }),
+    }));
+  });
+
   it('serializes template scale values as exact decimal strings', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
       id: 'version-1', categoryId: 'cat-1', version: 1, status: 'draft', criteria: [],

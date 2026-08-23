@@ -37,7 +37,7 @@ class PortabilityTest {
                 entity.entity.id,
                 write(Instant.parse("2026-08-13T00:00:00Z"), criterionId).copy(finalize = true),
             )
-            engine.createReview(
+            val newest = engine.createReview(
                 entity.entity.id,
                 write(Instant.parse("2026-08-13T00:00:00.100Z"), criterionId).copy(finalize = true),
             )
@@ -52,6 +52,20 @@ class PortabilityTest {
             )
             assertEquals(Instant.parse("2026-08-13T00:00:00.100Z"), comparison.entities.single().lastReviewedAt)
             assertEquals(1, comparison.entities.single().reviewCount)
+
+            engine.updateReviewVisibility(
+                newest.review.id,
+                ReviewVisibilityUpdate(hidden = true, expectedLockVersion = newest.review.lockVersion),
+            )
+            val fallback = engine.compare(
+                ComparisonQuery(
+                    categoryId = category.id,
+                    entityIds = listOf(entity.entity.id),
+                    aggregation = Aggregation.LATEST,
+                ),
+            ).entities.single()
+            assertEquals(Instant.parse("2026-08-13T00:00:00Z"), fallback.lastReviewedAt)
+            assertEquals(1, fallback.reviewCount)
         }
     }
 
@@ -87,6 +101,88 @@ class PortabilityTest {
                     }
                 }
                 assertEquals("2026-08-13T00:00:00.200000000Z", storedTimestamp)
+            }
+        }
+    }
+
+    @Test
+    fun `hidden state round trips and pre visibility exports remain importable`() {
+        revisionFixture { source, ids ->
+            val current = source.getReview(ids.reviewC)
+            val hidden = source.updateReviewVisibility(
+                ids.reviewC,
+                ReviewVisibilityUpdate(hidden = true, expectedLockVersion = current.review.lockVersion),
+            )
+            assertEquals(fixedClock.instant(), hidden.review.hiddenAt)
+            assertEquals(0, source.listReviews(ids.entity).items.size)
+            assertEquals(1, source.listReviews(ids.entity, includeHidden = true).items.size)
+            assertEquals(2, source.listReviews(ids.entity, includeSuperseded = true).items.size)
+            assertEquals(
+                3,
+                source.listReviews(ids.entity, includeSuperseded = true, includeHidden = true).items.size,
+            )
+            val comparison = source.compare(
+                ComparisonQuery(
+                    categoryId = ids.category,
+                    entityIds = listOf(ids.entity),
+                    aggregation = Aggregation.HISTORY,
+                ),
+            ).entities.single()
+            assertEquals(0, comparison.reviewCount)
+            assertTrue(comparison.history.isEmpty())
+            assertTrue(comparison.criteria.single().missing)
+
+            val superseded = source.getReview(ids.reviewA)
+            val hiddenSuperseded = source.updateReviewVisibility(
+                ids.reviewA,
+                ReviewVisibilityUpdate(hidden = true, expectedLockVersion = superseded.review.lockVersion),
+            )
+            assertEquals(ReviewStatus.SUPERSEDED, hiddenSuperseded.review.status)
+            assertEquals(fixedClock.instant(), hiddenSuperseded.review.hiddenAt)
+
+            val exported = source.exportJson()
+            val exportedHiddenAt = exported.table("review")
+                .single { it.jsonObject.getValue("id").jsonPrimitive.content == ids.reviewC.toString() }
+                .jsonObject.getValue("hidden_at").jsonPrimitive.content
+            assertEquals(fixedClock.instant(), Instant.parse(exportedHiddenAt))
+
+            Database("jdbc:sqlite::memory:").use { targetDatabase ->
+                targetDatabase.migrate()
+                val target = ReviewEngine(targetDatabase, fixedClock)
+                assertTrue(target.validateImport(exported).valid)
+                target.importJson(exported)
+
+                val restored = target.getReview(ids.reviewC)
+                assertEquals(fixedClock.instant(), restored.review.hiddenAt)
+                assertEquals(3, target.listReviews(
+                    ids.entity,
+                    includeSuperseded = true,
+                    includeHidden = true,
+                ).items.size)
+            }
+
+            val preVisibilityExport = exported.withTable(
+                "review",
+                JsonArray(exported.table("review").map { row -> JsonObject(row.jsonObject - "hidden_at") }),
+            ).let { JsonObject(it + ("formatVersion" to JsonPrimitive("1.0"))) }
+            val missingVisibilityInCurrentFormat = JsonObject(
+                preVisibilityExport + ("formatVersion" to JsonPrimitive(EXPORT_FORMAT_VERSION)),
+            )
+            assertTrue(
+                source.validateImport(missingVisibilityInCurrentFormat).errors.any {
+                    it.code == "MISSING_COLUMNS" && it.message.contains("hidden_at")
+                },
+            )
+            val hiddenDraft = exported.updateRow("review", ids.reviewC) { row ->
+                JsonObject(row + ("status" to JsonPrimitive("draft")))
+            }
+            assertTrue(source.validateImport(hiddenDraft).errors.any { it.message.contains("Draft reviews cannot be hidden") })
+            Database("jdbc:sqlite::memory:").use { targetDatabase ->
+                targetDatabase.migrate()
+                val target = ReviewEngine(targetDatabase, fixedClock)
+                assertTrue(target.validateImport(preVisibilityExport).valid)
+                target.importJson(preVisibilityExport)
+                assertEquals(null, target.getReview(ids.reviewC).review.hiddenAt)
             }
         }
     }

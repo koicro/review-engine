@@ -146,6 +146,11 @@ data class ComparisonQuery(
     val reviewerId: UUID? = null,
 )
 
+data class ReviewVisibilityUpdate(
+    val hidden: Boolean,
+    val expectedLockVersion: Long,
+)
+
 data class ImportIssue(
     val path: String,
     val code: String,
@@ -167,4 +172,4 @@ data class TokenRecord(
 )
 
 const val DEFAULT_REVIEWER_ID: String = "00000000-0000-0000-0000-000000000001"
-const val EXPORT_FORMAT_VERSION: String = "1.0"
+const val EXPORT_FORMAT_VERSION: String = "1.1"

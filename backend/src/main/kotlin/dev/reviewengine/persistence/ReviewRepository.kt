@@ -40,8 +40,8 @@ class ReviewRepository(
         connection.prepareStatement(
             """INSERT INTO review
                 (id, entity_id, reviewer_id, template_version_id, reviewed_at, status, supersedes_review_id,
-                 created_at, updated_at, lock_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 created_at, updated_at, lock_version, hidden_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         ).use { statement ->
             statement.setUuid(1, review.id)
             statement.setUuid(2, review.entityId)
@@ -53,6 +53,7 @@ class ReviewRepository(
             statement.setInstant(8, review.createdAt)
             statement.setInstant(9, review.updatedAt)
             statement.setLong(10, review.lockVersion)
+            statement.setNullableInstant(11, review.hiddenAt)
             statement.executeUpdate()
         }
         scores.forEach { insertScore(connection, it) }
@@ -78,18 +79,17 @@ class ReviewRepository(
         entityId: UUID,
         includeDrafts: Boolean = true,
         includeSuperseded: Boolean = true,
+        includeHidden: Boolean = false,
     ): List<Review> {
-        val excluded = buildList {
-            if (!includeDrafts) add("draft")
-            if (!includeSuperseded) add("superseded")
+        val conditions = buildList {
+            add("entity_id = ?")
+            if (!includeDrafts) add("status <> 'draft'")
+            if (!includeSuperseded) add("status <> 'superseded'")
+            if (!includeHidden) add("hidden_at IS NULL")
         }
-        val placeholders = excluded.joinToString(",") { "?" }
-        val sql = "SELECT * FROM review WHERE entity_id = ?" +
-            if (excluded.isEmpty()) " ORDER BY reviewed_at DESC, id DESC"
-            else " AND status NOT IN ($placeholders) ORDER BY reviewed_at DESC, id DESC"
+        val sql = "SELECT * FROM review WHERE ${conditions.joinToString(" AND ")} ORDER BY reviewed_at DESC, id DESC"
         return connection.prepareStatement(sql).use { statement ->
             statement.setUuid(1, entityId)
-            excluded.forEachIndexed { index, status -> statement.setString(index + 2, status) }
             statement.executeQuery().use { result -> result.mapRows { it.toReview() } }
         }
     }
@@ -224,5 +224,6 @@ class ReviewRepository(
         createdAt = instant("created_at"),
         updatedAt = instant("updated_at"),
         lockVersion = getLong("lock_version"),
+        hiddenAt = nullableInstant("hidden_at"),
     )
 }

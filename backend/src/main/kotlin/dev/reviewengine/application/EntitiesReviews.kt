@@ -28,7 +28,8 @@ fun ReviewEngine.listEntities(
         """
         SELECT e.*, c.name AS category_name,
                (SELECT COUNT(*) FROM review r WHERE r.entity_id = e.id) AS review_count,
-               (SELECT MAX(r.reviewed_at) FROM review r WHERE r.entity_id = e.id AND r.status = 'final') AS latest_reviewed_at
+               (SELECT MAX(r.reviewed_at) FROM review r
+                WHERE r.entity_id = e.id AND r.status = 'final' AND r.hidden_at IS NULL) AS latest_reviewed_at
         FROM entity e
         JOIN category c ON c.id = e.category_id
         WHERE (? = 1 OR e.archived_at IS NULL)
@@ -146,6 +147,7 @@ fun ReviewEngine.deleteEntity(id: UUID) = mapSqlConflict {
 fun ReviewEngine.listReviews(
     entityId: UUID,
     includeSuperseded: Boolean = false,
+    includeHidden: Boolean = false,
     cursor: String? = null,
     limit: Int? = null,
 ): Page<ReviewSnapshot> = database.read { connection ->
@@ -155,15 +157,18 @@ fun ReviewEngine.listReviews(
     connection.prepareStatement(
         """
         SELECT * FROM review
-        WHERE entity_id = ? AND (? = 1 OR status <> 'superseded')
+        WHERE entity_id = ?
+          AND (? = 1 OR status <> 'superseded')
+          AND (? = 1 OR hidden_at IS NULL)
         ORDER BY reviewed_at DESC, created_at DESC, id DESC
         LIMIT ? OFFSET ?
         """.trimIndent(),
     ).use { statement ->
         statement.setString(1, entityId.toString())
         statement.setInt(2, if (includeSuperseded) 1 else 0)
-        statement.setInt(3, pageSize + 1)
-        statement.setInt(4, offset)
+        statement.setInt(3, if (includeHidden) 1 else 0)
+        statement.setInt(4, pageSize + 1)
+        statement.setInt(5, offset)
         statement.executeQuery().use { result ->
             val reviews = buildList { while (result.next()) add(result.toReview()) }
             Page(
@@ -176,6 +181,44 @@ fun ReviewEngine.listReviews(
 
 fun ReviewEngine.getReview(id: UUID): ReviewSnapshot = database.read { connection ->
     reviewSnapshot(connection, connection.review(id))
+}
+
+fun ReviewEngine.updateReviewVisibility(id: UUID, update: ReviewVisibilityUpdate): ReviewSnapshot = mapSqlConflict {
+    database.write { connection ->
+        val review = connection.review(id)
+        if (review.status == ReviewStatus.DRAFT) {
+            throw DomainException(
+                DomainErrorCode.INVALID_STATE_TRANSITION,
+                "Draft reviews cannot be hidden; delete the draft instead",
+                mapOf("reviewId" to id.toString()),
+            )
+        }
+        if (review.lockVersion != update.expectedLockVersion) {
+            optimisticConflict("Review", id, update.expectedLockVersion, review.lockVersion)
+        }
+        if (update.hidden == (review.hiddenAt != null)) {
+            throw DomainException(
+                DomainErrorCode.INVALID_STATE_TRANSITION,
+                if (update.hidden) "Review is already hidden" else "Review is already visible",
+                mapOf("reviewId" to id.toString()),
+            )
+        }
+        val changedAt = now()
+        connection.prepareStatement(
+            """
+            UPDATE review
+            SET hidden_at = ?, updated_at = ?, lock_version = lock_version + 1
+            WHERE id = ? AND status IN ('final', 'superseded') AND lock_version = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setNullableString(1, if (update.hidden) changedAt.toDatabaseTimestamp() else null)
+            statement.setString(2, changedAt.toDatabaseTimestamp())
+            statement.setString(3, id.toString())
+            statement.setLong(4, update.expectedLockVersion)
+            if (statement.executeUpdate() != 1) optimisticConflict("Review", id, update.expectedLockVersion, null)
+        }
+        reviewSnapshot(connection, connection.review(id))
+    }
 }
 
 fun ReviewEngine.createReview(entityId: UUID, write: ReviewWrite): ReviewSnapshot = mapSqlConflict {
@@ -341,7 +384,8 @@ private fun entitySnapshot(connection: Connection, id: UUID): EntitySnapshot = c
     """
     SELECT e.*, c.name AS category_name,
            (SELECT COUNT(*) FROM review r WHERE r.entity_id = e.id) AS review_count,
-           (SELECT MAX(r.reviewed_at) FROM review r WHERE r.entity_id = e.id AND r.status = 'final') AS latest_reviewed_at
+           (SELECT MAX(r.reviewed_at) FROM review r
+            WHERE r.entity_id = e.id AND r.status = 'final' AND r.hidden_at IS NULL) AS latest_reviewed_at
     FROM entity e JOIN category c ON c.id = e.category_id WHERE e.id = ?
     """.trimIndent(),
 ).use { statement ->
@@ -425,8 +469,8 @@ private fun insertReview(connection: Connection, review: Review, scores: List<Sc
         """
         INSERT INTO review(
             id, entity_id, reviewer_id, template_version_id, reviewed_at, status,
-            supersedes_review_id, created_at, updated_at, lock_version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            supersedes_review_id, created_at, updated_at, lock_version, hidden_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
         """.trimIndent(),
     ).use { statement ->
         statement.setString(1, review.id.toString())
@@ -438,6 +482,7 @@ private fun insertReview(connection: Connection, review: Review, scores: List<Sc
         statement.setNullableString(7, review.supersedesReviewId?.toString())
         statement.setString(8, review.createdAt.toDatabaseTimestamp())
         statement.setString(9, review.updatedAt.toDatabaseTimestamp())
+        statement.setNullableString(10, review.hiddenAt?.toDatabaseTimestamp())
         statement.executeUpdate()
     }
     replaceScores(connection, review.id, scores)

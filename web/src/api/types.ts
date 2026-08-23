@@ -96,6 +96,7 @@ export interface Review {
   createdAt: IsoDateTime;
   status: ReviewStatus;
   supersedesReviewId?: Id | null;
+  hiddenAt?: IsoDateTime | null;
   scores: Score[];
   revision: number;
 }

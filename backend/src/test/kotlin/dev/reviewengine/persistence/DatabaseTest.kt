@@ -40,6 +40,79 @@ class DatabaseTest {
     }
 
     @Test
+    fun `review visibility migration upgrades an existing database without losing history`() {
+        val path = Files.createTempFile("review-engine-v001-", ".sqlite")
+        val jdbcUrl = "jdbc:sqlite:${path.toAbsolutePath()}"
+        try {
+            Class.forName("org.sqlite.JDBC")
+            DriverManager.getConnection(jdbcUrl).use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeUpdate(
+                        """
+                        CREATE TABLE schema_migration (
+                            version INTEGER PRIMARY KEY NOT NULL,
+                            description TEXT NOT NULL,
+                            applied_at TEXT NOT NULL
+                        )
+                        """.trimIndent(),
+                    )
+                    statement.executeUpdate(
+                        "INSERT INTO schema_migration VALUES (1, 'initial schema', '2026-08-13T00:00:00Z')",
+                    )
+                    statement.executeUpdate(
+                        """
+                        CREATE TABLE review (
+                            id TEXT PRIMARY KEY NOT NULL,
+                            entity_id TEXT NOT NULL,
+                            status TEXT NOT NULL,
+                            reviewed_at TEXT NOT NULL
+                        )
+                        """.trimIndent(),
+                    )
+                    statement.executeUpdate(
+                        """
+                        INSERT INTO review(id, entity_id, status, reviewed_at)
+                        VALUES (
+                            '00000000-0000-0000-0000-000000000040',
+                            '00000000-0000-0000-0000-000000000030',
+                            'final',
+                            '2026-08-13T00:00:00Z'
+                        )
+                        """.trimIndent(),
+                    )
+                }
+            }
+
+            Database(jdbcUrl).use { database ->
+                database.migrate()
+                database.migrate()
+                database.read { connection ->
+                    val columns = connection.createStatement().use { statement ->
+                        statement.executeQuery("PRAGMA table_info(review)").use { result ->
+                            buildSet { while (result.next()) add(result.getString("name")) }
+                        }
+                    }
+                    assertTrue("hidden_at" in columns)
+                    connection.createStatement().use { statement ->
+                        statement.executeQuery("SELECT hidden_at FROM review").use { result ->
+                            assertTrue(result.next())
+                            assertEquals(null, result.getString("hidden_at"))
+                        }
+                        statement.executeQuery(
+                            "SELECT group_concat(version, ',') FROM (SELECT version FROM schema_migration ORDER BY version)",
+                        ).use { result ->
+                            assertTrue(result.next())
+                            assertEquals("1,2", result.getString(1))
+                        }
+                    }
+                }
+            }
+        } finally {
+            Files.deleteIfExists(path)
+        }
+    }
+
+    @Test
     fun `write rolls back the complete transaction on failure`() {
         Database("jdbc:sqlite::memory:").use { database ->
             database.migrate()

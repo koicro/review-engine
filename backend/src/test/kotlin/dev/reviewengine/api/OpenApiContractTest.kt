@@ -96,6 +96,18 @@ class OpenApiContractTest {
         }
     }
 
+    @Test
+    fun portableContractDocumentsCurrentExportsAndCompatibleImports() {
+        val versions = document.getValue("components").jsonObject
+            .getValue("schemas").jsonObject
+            .getValue("PortableDocument").jsonObject
+            .getValue("properties").jsonObject
+            .getValue("formatVersion").jsonObject
+            .getValue("enum").asArray()
+            .mapTo(mutableSetOf()) { it.jsonPrimitive.content }
+        assertEquals(setOf("1.0", "1.1"), versions)
+    }
+
     private fun operations(): Map<String, JsonObject> = buildMap {
         document.getValue("paths").jsonObject.forEach { (path, pathValue) ->
             pathValue.jsonObject.forEach { (method, operation) ->
@@ -162,6 +174,7 @@ class OpenApiContractTest {
             "DELETE /reviews/{reviewId}",
             "POST /reviews/{reviewId}/finalize",
             "POST /reviews/{reviewId}/revisions",
+            "PATCH /reviews/{reviewId}/visibility",
             "GET /comparisons",
             "GET /relation-types",
             "POST /relation-types",
@@ -179,7 +192,7 @@ class OpenApiContractTest {
         val expectedQueryParameters = mapOf(
             "GET /categories" to setOf("cursor", "includeArchived", "limit"),
             "GET /entities" to setOf("categoryId", "query", "includeArchived", "cursor", "limit"),
-            "GET /entities/{entityId}/reviews" to setOf("includeSuperseded", "cursor", "limit"),
+            "GET /entities/{entityId}/reviews" to setOf("includeSuperseded", "includeHidden", "cursor", "limit"),
             "GET /entities/{entityId}/related" to setOf("relationTypeId", "direction", "maxDepth"),
             "DELETE /reviews/{reviewId}" to setOf("revision"),
             "GET /comparisons" to setOf("categoryId", "entityId", "aggregation", "from", "to", "reviewerId"),
@@ -199,6 +212,7 @@ class OpenApiContractTest {
             "PATCH /reviews/{reviewId}",
             "POST /reviews/{reviewId}/finalize",
             "POST /reviews/{reviewId}/revisions",
+            "PATCH /reviews/{reviewId}/visibility",
             "POST /relation-types",
             "POST /relations",
             "POST /imports/validate",

@@ -247,7 +247,7 @@ export class ApiClient {
     return this.request<void>(`/entities/${id}`, { method: 'DELETE' });
   }
 
-  listReviews(entityId: Id, options: { cursor?: string; includeSuperseded?: boolean; limit?: number } = {}) {
+  listReviews(entityId: Id, options: { cursor?: string; includeSuperseded?: boolean; includeHidden?: boolean; limit?: number } = {}) {
     return this.request<Page<Review> | Review[]>(
       `/entities/${entityId}/reviews${buildQuery(options)}`,
     ).then(asPage);
@@ -283,6 +283,13 @@ export class ApiClient {
 
   deleteDraftReview(reviewId: Id, revision: number) {
     return this.request<void>(`/reviews/${reviewId}?revision=${encodeURIComponent(revision)}`, { method: 'DELETE' });
+  }
+
+  updateReviewVisibility(reviewId: Id, input: { hidden: boolean; revision: number }) {
+    return this.request<Review>(`/reviews/${reviewId}/visibility`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    });
   }
 
   compare(input: {

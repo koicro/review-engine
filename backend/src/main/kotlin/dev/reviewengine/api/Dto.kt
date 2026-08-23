@@ -11,6 +11,7 @@ import dev.reviewengine.application.ProjectionCriterion
 import dev.reviewengine.application.RelatedEntitySnapshot
 import dev.reviewengine.application.RelationSnapshot
 import dev.reviewengine.application.ReviewSnapshot
+import dev.reviewengine.application.ReviewVisibilityUpdate
 import dev.reviewengine.application.ReviewWrite
 import dev.reviewengine.application.ScoreInput
 import dev.reviewengine.application.TemplateSnapshot
@@ -187,6 +188,11 @@ data class ReviewWriteDto(
 data class FinalizeReviewDto(val revision: Long, val scores: List<ScoreWriteDto>? = null)
 
 @Serializable
+data class ReviewVisibilityDto(val hidden: Boolean, val revision: Long) {
+    fun input() = ReviewVisibilityUpdate(hidden, revision)
+}
+
+@Serializable
 data class ScoreDto(
     val criterionId: String,
     val criterionName: String,
@@ -213,6 +219,7 @@ data class ReviewDto(
     val createdAt: String,
     val updatedAt: String,
     val status: String,
+    val hiddenAt: String? = null,
     val supersedesReviewId: String? = null,
     val scores: List<ScoreDto>,
     val revision: Long,
@@ -363,7 +370,7 @@ internal fun ReviewSnapshot.dto() = ReviewDto(
     ReviewerDto(review.reviewerId.toString(), reviewerName), review.templateVersionId.toString(),
     TemplateSummaryDto(review.templateVersionId.toString(), templateVersion), review.reviewedAt.toString(),
     review.createdAt.toString(), review.updatedAt.toString(), review.status.databaseValue,
-    review.supersedesReviewId?.toString(), scores.map { score ->
+    review.hiddenAt?.toString(), review.supersedesReviewId?.toString(), scores.map { score ->
         ScoreDto(
             score.criterionId.toString(), score.criterionName, score.tickIndex, score.displayValue,
             score.normalizedValue.toDouble(), score.minValue, score.maxValue, score.stepValue,

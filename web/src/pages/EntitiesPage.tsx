@@ -15,6 +15,7 @@ export function EntitiesPage() {
   const [queryInput, setQueryInput] = useState('');
   const [query, setQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const [showHiddenReviews, setShowHiddenReviews] = useState(false);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [reviewNextCursor, setReviewNextCursor] = useState<string | null | undefined>();
   const [template, setTemplate] = useState<TemplateVersion | null>(null);
@@ -28,12 +29,16 @@ export function EntitiesPage() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [editingReview, setEditingReview] = useState<Review | null>(null);
   const [editingTemplate, setEditingTemplate] = useState<TemplateVersion | null>(null);
+  const [visibilityChangingReviewId, setVisibilityChangingReviewId] = useState('');
+  const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
   const selectedIdRef = useRef(selectedId);
+  const reviewRequestGenerationRef = useRef(0);
   selectedIdRef.current = selectedId;
 
   const selected = entities.find((entity) => entity.id === selectedId);
   const selectedCategory = categories.find((category) => category.id === selected?.categoryId);
+  const hiddenHistoryMayExist = !showHiddenReviews && reviews.length === 0 && (selected?.reviewCount ?? 0) > 0;
 
   useEffect(() => {
     let active = true;
@@ -53,14 +58,17 @@ export function EntitiesPage() {
 
   useEffect(() => {
     if (!selected) {
+      reviewRequestGenerationRef.current += 1;
       setReviews([]);
       setReviewNextCursor(null);
       setTemplate(null);
       return;
     }
+    const requestGeneration = ++reviewRequestGenerationRef.current;
     window.sessionStorage.setItem('review-engine.selected-entity', selected.id);
     let active = true;
     setDetailLoading(true);
+    setLoadingMoreReviews(false);
     setDetailError('');
     const category = categories.find((item) => item.id === selected.categoryId);
     const templatePromise = category?.activeTemplateVersion
@@ -69,38 +77,42 @@ export function EntitiesPage() {
         ? api.getTemplateVersion(category.activeTemplateVersionId)
         : Promise.resolve(null);
     Promise.all([
-      api.listReviews(selected.id, { includeSuperseded: true, limit: 50 }),
+      api.listReviews(selected.id, { includeSuperseded: true, includeHidden: showHiddenReviews || undefined, limit: 50 }),
       templatePromise,
     ]).then(([reviewPage, activeTemplate]) => {
-      if (!active) return;
+      if (!active || requestGeneration !== reviewRequestGenerationRef.current) return;
       setReviews(reviewPage.items);
       setReviewNextCursor(reviewPage.nextCursor);
       setTemplate(activeTemplate);
-    }).catch((cause) => active && setDetailError(explainError(cause))).finally(() => active && setDetailLoading(false));
+    }).catch((cause) => active && requestGeneration === reviewRequestGenerationRef.current && setDetailError(explainError(cause))).finally(() => {
+      if (active && requestGeneration === reviewRequestGenerationRef.current) setDetailLoading(false);
+    });
     return () => { active = false; };
-  }, [api, selected, categories, refreshKey]);
+  }, [api, selected, categories, showHiddenReviews, reviewRefreshKey, refreshKey]);
 
   async function loadMoreReviews() {
     if (!selected || !reviewNextCursor) return;
     const entityId = selected.id;
+    const requestGeneration = reviewRequestGenerationRef.current;
     setLoadingMoreReviews(true);
     setDetailError('');
     try {
       const page = await api.listReviews(entityId, {
         includeSuperseded: true,
+        includeHidden: showHiddenReviews || undefined,
         cursor: reviewNextCursor,
         limit: 50,
       });
-      if (selectedIdRef.current !== entityId) return;
+      if (selectedIdRef.current !== entityId || requestGeneration !== reviewRequestGenerationRef.current) return;
       setReviews((items) => {
         const existing = new Set(items.map((item) => item.id));
         return [...items, ...page.items.filter((item) => !existing.has(item.id))];
       });
       setReviewNextCursor(page.nextCursor);
     } catch (cause) {
-      if (selectedIdRef.current === entityId) setDetailError(explainError(cause));
+      if (selectedIdRef.current === entityId && requestGeneration === reviewRequestGenerationRef.current) setDetailError(explainError(cause));
     } finally {
-      setLoadingMoreReviews(false);
+      if (selectedIdRef.current === entityId && requestGeneration === reviewRequestGenerationRef.current) setLoadingMoreReviews(false);
     }
   }
 
@@ -120,6 +132,27 @@ export function EntitiesPage() {
       setDetailError(explainError(cause));
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  async function updateReviewVisibility(review: Review, hidden: boolean) {
+    if (hidden && !window.confirm(en.entities.hideReviewConfirmation)) return;
+    setVisibilityChangingReviewId(review.id);
+    setDetailError('');
+    try {
+      const updated = await api.updateReviewVisibility(review.id, { hidden, revision: review.revision });
+      setReviews((items) => showHiddenReviews
+        ? items.map((item) => item.id === updated.id ? updated : item)
+        : items.filter((item) => item.id !== updated.id));
+      reviewRequestGenerationRef.current += 1;
+      setReviewNextCursor(undefined);
+      setLoadingMoreReviews(false);
+      setNotice(hidden ? en.entities.reviewHidden : en.entities.reviewRestored);
+      setReviewRefreshKey((value) => value + 1);
+    } catch (cause) {
+      setDetailError(explainError(cause));
+    } finally {
+      setVisibilityChangingReviewId('');
     }
   }
 
@@ -167,11 +200,11 @@ export function EntitiesPage() {
                   <Card>
                     <div className="section-heading timeline-heading">
                       <div><p className="eyebrow">{en.entities.timeline}</p><h2>{en.entities.reviewHistory}</h2><p>{en.entities.finalObservations(reviews.filter((review) => review.status === 'final').length, Boolean(reviewNextCursor))}</p></div>
-                      <Button onClick={() => void openReviewEditor(null)} disabled={!template || Boolean(selected.archivedAt)}>{template ? en.entities.recordReview : en.entities.publishTemplateFirst}</Button>
+                      <div className="timeline-actions"><label className="compact-check"><input type="checkbox" checked={showHiddenReviews} onChange={(event) => { reviewRequestGenerationRef.current += 1; setReviewNextCursor(undefined); setLoadingMoreReviews(false); setShowHiddenReviews(event.target.checked); }} /> {en.entities.showHiddenReviews}</label><Button onClick={() => void openReviewEditor(null)} disabled={!template || Boolean(selected.archivedAt)}>{template ? en.entities.recordReview : en.entities.publishTemplateFirst}</Button></div>
                     </div>
-                    {reviews.length === 0 ? <EmptyState title={en.entities.noReviews} description={en.entities.noReviewsDescription} action={template && !selected.archivedAt && <Button variant="secondary" onClick={() => void openReviewEditor(null)}>{en.entities.recordFirstReview}</Button>} /> : (
+                    {reviews.length === 0 ? <EmptyState title={hiddenHistoryMayExist ? en.entities.noVisibleReviews : en.entities.noReviews} description={hiddenHistoryMayExist ? en.entities.noVisibleReviewsDescription : en.entities.noReviewsDescription} action={template && !selected.archivedAt && <Button variant="secondary" onClick={() => void openReviewEditor(null)}>{hiddenHistoryMayExist ? en.entities.recordReview : en.entities.recordFirstReview}</Button>} /> : (
                       <>
-                        <ReviewTimeline reviews={reviews} activeTemplate={template} onEdit={(review) => void openReviewEditor(review)} onDelete={async (review) => {
+                        <ReviewTimeline reviews={reviews} activeTemplate={template} visibilityChangingReviewId={visibilityChangingReviewId} onEdit={(review) => void openReviewEditor(review)} onVisibilityChange={(review, hidden) => void updateReviewVisibility(review, hidden)} onDelete={async (review) => {
                           if (!window.confirm(en.entities.deleteDraftConfirmation)) return;
                           try { await api.deleteDraftReview(review.id, review.revision); setReviews((items) => items.filter((item) => item.id !== review.id)); setNotice(en.entities.draftDeleted); }
                           catch (cause) { setDetailError(explainError(cause)); }
@@ -283,16 +316,18 @@ function EntitySummary({ entity, category, categories, onChanged, onDeleted, onE
   );
 }
 
-function ReviewTimeline({ reviews, activeTemplate, onEdit, onDelete }: { reviews: Review[]; activeTemplate: TemplateVersion | null; onEdit: (review: Review) => void; onDelete: (review: Review) => void }) {
+function ReviewTimeline({ reviews, activeTemplate, visibilityChangingReviewId, onEdit, onDelete, onVisibilityChange }: { reviews: Review[]; activeTemplate: TemplateVersion | null; visibilityChangingReviewId: string; onEdit: (review: Review) => void; onDelete: (review: Review) => void; onVisibilityChange: (review: Review, hidden: boolean) => void }) {
   return (
     <ol className="review-timeline">
       {reviews.map((review) => {
         const definition = review.templateVersionId === activeTemplate?.id ? activeTemplate : null;
+        const hidden = Boolean(review.hiddenAt);
+        const className = [review.status === 'superseded' ? 'superseded' : '', hidden ? 'hidden-review' : ''].filter(Boolean).join(' ');
         return (
-          <li key={review.id} className={review.status === 'superseded' ? 'superseded' : ''}>
+          <li key={review.id} className={className}>
             <div className="timeline-dot" aria-hidden="true" />
             <article>
-              <header><div><time dateTime={review.reviewedAt}>{formatDateTime(review.reviewedAt)}</time><span>{en.entities.templateVersion(review.templateVersion?.version ?? definition?.version ?? '?')}</span>{review.reviewer?.displayName && <span>{en.entities.reviewedBy(review.reviewer.displayName)}</span>}</div><Badge tone={review.status === 'final' ? 'success' : review.status === 'draft' ? 'warning' : 'neutral'}>{en.common.status(review.status)}</Badge></header>
+              <header><div><time dateTime={review.reviewedAt}>{formatDateTime(review.reviewedAt)}</time><span>{en.entities.templateVersion(review.templateVersion?.version ?? definition?.version ?? '?')}</span>{review.reviewer?.displayName && <span>{en.entities.reviewedBy(review.reviewer.displayName)}</span>}</div><div className="review-badges">{hidden && <Badge>{en.entities.hiddenReview}</Badge>}<Badge tone={review.status === 'final' ? 'success' : review.status === 'draft' ? 'warning' : 'neutral'}>{en.common.status(review.status)}</Badge></div></header>
               <div className="review-scores">
                 {review.scores.map((score) => {
                   const criterion = definition?.criteria.find((item) => criterionId(item) === score.criterionId);
@@ -300,7 +335,7 @@ function ReviewTimeline({ reviews, activeTemplate, onEdit, onDelete }: { reviews
                   return <div key={score.criterionId}><span>{score.criterionName || criterion?.name || en.common.criterion}</span><strong>{formatScore(displayValue)}</strong>{score.normalizedValue !== undefined && <small>{Math.round(score.normalizedValue * 100)}%</small>}</div>;
                 })}
               </div>
-              {review.status !== 'superseded' && <footer>{review.status === 'draft' && <button className="text-button danger-text" onClick={() => onDelete(review)}>{en.entities.deleteDraft}</button>}<button className="text-button" onClick={() => onEdit(review)}>{review.status === 'draft' ? en.entities.continueDraft : en.entities.correctReview}</button></footer>}
+              <footer>{review.status === 'draft' ? <><button className="text-button danger-text" onClick={() => onDelete(review)}>{en.entities.deleteDraft}</button><button className="text-button" onClick={() => onEdit(review)}>{en.entities.continueDraft}</button></> : <><button className={hidden ? 'text-button' : 'text-button danger-text'} disabled={visibilityChangingReviewId === review.id} onClick={() => onVisibilityChange(review, !hidden)}>{hidden ? en.entities.restoreReview : en.entities.hideReview}</button>{review.status === 'final' && !hidden && <button className="text-button" onClick={() => onEdit(review)}>{en.entities.correctReview}</button>}</>}</footer>
             </article>
           </li>
         );

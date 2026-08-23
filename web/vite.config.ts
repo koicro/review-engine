@@ -1,16 +1,18 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
+const apiProxy = process.env.REVIEW_API_PROXY ?? 'http://127.0.0.1:8080';
+
 export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
       '/api': {
-        target: process.env.REVIEW_API_PROXY ?? 'http://localhost:8080',
+        target: apiProxy,
         changeOrigin: true,
       },
       '/openapi.json': {
-        target: process.env.REVIEW_API_PROXY ?? 'http://localhost:8080',
+        target: apiProxy,
         changeOrigin: true,
       },
     },

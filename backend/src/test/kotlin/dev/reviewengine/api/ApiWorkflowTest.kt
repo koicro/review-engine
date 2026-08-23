@@ -3,8 +3,10 @@ package dev.reviewengine.api
 import dev.reviewengine.application.ReviewEngine
 import dev.reviewengine.persistence.Database
 import io.ktor.client.request.bearerAuth
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -101,6 +103,87 @@ class ApiWorkflowTest {
                 val historyResponse = client.get("/api/v1/entities/$entityId/reviews") { bearerAuth(TOKEN) }
                 assertEquals(HttpStatusCode.OK, historyResponse.status)
                 assertEquals(1, json.parseToJsonElement(historyResponse.bodyAsText()).jsonObject.getValue("items").jsonArray.size)
+
+                val hiddenResponse = client.patch("/api/v1/reviews/$reviewId/visibility") {
+                    bearerAuth(TOKEN)
+                    header(HttpHeaders.ContentType, ContentType.Application.Json)
+                    setBody("""{"hidden":true,"revision":${final.getValue("revision").jsonPrimitive.content}}""")
+                }
+                assertEquals(HttpStatusCode.OK, hiddenResponse.status)
+                val hidden = json.parseToJsonElement(hiddenResponse.bodyAsText()).jsonObject
+                assertEquals("final", hidden.string("status"))
+                assertTrue("hiddenAt" in hidden)
+                assertEquals(final.getValue("scores"), hidden.getValue("scores"))
+                val hiddenRevision = hidden.getValue("revision").jsonPrimitive.content
+                val directHiddenResponse = client.get("/api/v1/reviews/$reviewId") { bearerAuth(TOKEN) }
+                assertEquals(HttpStatusCode.OK, directHiddenResponse.status)
+                val directHidden = json.parseToJsonElement(directHiddenResponse.bodyAsText()).jsonObject
+                assertEquals(hidden.getValue("hiddenAt"), directHidden.getValue("hiddenAt"))
+
+                val staleRestore = client.patch("/api/v1/reviews/$reviewId/visibility") {
+                    bearerAuth(TOKEN)
+                    header(HttpHeaders.ContentType, ContentType.Application.Json)
+                    setBody("""{"hidden":false,"revision":${final.getValue("revision").jsonPrimitive.content}}""")
+                }
+                assertEquals(HttpStatusCode.Conflict, staleRestore.status)
+
+                val defaultHiddenHistory = client.get("/api/v1/entities/$entityId/reviews") { bearerAuth(TOKEN) }
+                assertEquals(
+                    0,
+                    json.parseToJsonElement(defaultHiddenHistory.bodyAsText()).jsonObject.getValue("items").jsonArray.size,
+                )
+                val completeHistory = client.get("/api/v1/entities/$entityId/reviews?includeHidden=true") { bearerAuth(TOKEN) }
+                assertEquals(
+                    1,
+                    json.parseToJsonElement(completeHistory.bodyAsText()).jsonObject.getValue("items").jsonArray.size,
+                )
+                val hiddenComparison = client.get(
+                    "/api/v1/comparisons?categoryId=$categoryId&entityId=$entityId&aggregation=history",
+                ) { bearerAuth(TOKEN) }
+                val hiddenProjection = json.parseToJsonElement(hiddenComparison.bodyAsText()).jsonObject
+                    .getValue("entities").jsonArray.single().jsonObject
+                assertEquals(0, hiddenProjection.getValue("reviewCount").jsonPrimitive.content.toInt())
+                assertTrue(hiddenProjection.getValue("history").jsonArray.isEmpty())
+                assertTrue(hiddenProjection.getValue("criteria").jsonArray.single().jsonObject
+                    .getValue("missing").jsonPrimitive.content.toBoolean())
+
+                val entityWithHiddenHistory = client.get("/api/v1/entities/$entityId") { bearerAuth(TOKEN) }
+                val entityBody = json.parseToJsonElement(entityWithHiddenHistory.bodyAsText()).jsonObject
+                assertEquals(1, entityBody.getValue("reviewCount").jsonPrimitive.content.toInt())
+                assertFalse("latestReviewedAt" in entityBody)
+                val otherCategory = postJson("/api/v1/categories", """{"name":"Tea"}""")
+                val moveWithHiddenHistory = client.patch("/api/v1/entities/$entityId") {
+                    bearerAuth(TOKEN)
+                    header(HttpHeaders.ContentType, ContentType.Application.Json)
+                    setBody(
+                        """{"categoryId":"${otherCategory.string("id")}","revision":${entityBody.getValue("revision").jsonPrimitive.content}}""",
+                    )
+                }
+                assertEquals(HttpStatusCode.Conflict, moveWithHiddenHistory.status)
+                val deleteWithHiddenHistory = client.delete("/api/v1/entities/$entityId") { bearerAuth(TOKEN) }
+                assertEquals(HttpStatusCode.Conflict, deleteWithHiddenHistory.status)
+
+                val restoredResponse = client.patch("/api/v1/reviews/$reviewId/visibility") {
+                    bearerAuth(TOKEN)
+                    header(HttpHeaders.ContentType, ContentType.Application.Json)
+                    setBody("""{"hidden":false,"revision":$hiddenRevision}""")
+                }
+                assertEquals(HttpStatusCode.OK, restoredResponse.status)
+                val restored = json.parseToJsonElement(restoredResponse.bodyAsText()).jsonObject
+                assertFalse("hiddenAt" in restored)
+                assertEquals("final", restored.string("status"))
+                assertEquals(hidden.getValue("scores"), restored.getValue("scores"))
+
+                val draftReview = postJson(
+                    "/api/v1/entities/$entityId/reviews",
+                    """{"reviewedAt":"2026-08-14T00:00:00Z"}""",
+                )
+                val hiddenDraft = client.patch("/api/v1/reviews/${draftReview.string("id")}/visibility") {
+                    bearerAuth(TOKEN)
+                    header(HttpHeaders.ContentType, ContentType.Application.Json)
+                    setBody("""{"hidden":true,"revision":${draftReview.getValue("revision").jsonPrimitive.content}}""")
+                }
+                assertEquals(HttpStatusCode.Conflict, hiddenDraft.status)
             }
         }
     }

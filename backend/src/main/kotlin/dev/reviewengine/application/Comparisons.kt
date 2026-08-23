@@ -65,6 +65,7 @@ private fun eligibleReviews(
     SELECT * FROM review
     WHERE entity_id = ?
       AND status = 'final'
+      AND hidden_at IS NULL
       AND (? IS NULL OR reviewed_at >= ?)
       AND (? IS NULL OR reviewed_at <= ?)
       AND (? IS NULL OR reviewer_id = ?)

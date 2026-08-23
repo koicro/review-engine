@@ -7,6 +7,12 @@ standard_container="review-engine-standard-${suffix}"
 headless_container="review-engine-headless-${suffix}"
 volume="review-engine-data-${suffix}"
 token="container-smoke-administrator-token"
+security_args=(
+  --read-only
+  --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m,mode=1777
+  --cap-drop ALL
+  --security-opt no-new-privileges:true
+)
 
 cleanup() {
   docker rm --force "$standard_container" "$headless_container" >/dev/null 2>&1 || true
@@ -20,6 +26,7 @@ docker run --detach \
   --volume "$volume:/data" \
   --env "REVIEW_ADMIN_TOKEN=$token" \
   --env "REVIEW_UI_ENABLED=true" \
+  "${security_args[@]}" \
   "$image" >/dev/null
 
 for _ in $(seq 1 30); do
@@ -71,6 +78,7 @@ docker run --detach \
   --volume "$volume:/data" \
   --env "REVIEW_ADMIN_TOKEN=$token" \
   --env "REVIEW_UI_ENABLED=false" \
+  "${security_args[@]}" \
   "$image" >/dev/null
 
 for _ in $(seq 1 30); do

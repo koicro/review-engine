@@ -159,6 +159,7 @@ internal fun ResultSet.toReview(prefix: String = ""): Review = Review(
     createdAt = instant("${prefix}created_at"),
     updatedAt = instant("${prefix}updated_at"),
     lockVersion = getLong("${prefix}lock_version"),
+    hiddenAt = instantOrNull("${prefix}hidden_at"),
 )
 
 internal fun ResultSet.toRelationType(prefix: String = ""): RelationType = RelationType(

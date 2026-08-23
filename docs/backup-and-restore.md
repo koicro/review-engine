@@ -8,6 +8,8 @@ Review data belongs to the operator. Keep backups outside the host that runs the
 
 Use the versioned JSON export through the UI or `POST /api/v1/exports` when the application is running. JSON is the portable backup format for moving data between Review Engine installations. Validate an import with `POST /api/v1/imports/validate` before writing it with `POST /api/v1/imports`.
 
+Current exports use format version 1.1 and preserve hidden review-history state. The importer also accepts version 1.0 exports; reviews without the 1.1 `hidden_at` field are restored as visible.
+
 An export is not a substitute for a database backup before a schema upgrade.
 
 ## Consistent SQLite backup

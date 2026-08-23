@@ -115,6 +115,7 @@ data class Review(
     val createdAt: Instant,
     val updatedAt: Instant,
     val lockVersion: Long = 0,
+    val hiddenAt: Instant? = null,
 )
 
 data class Score(

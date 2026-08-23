@@ -491,6 +491,7 @@
         "tags": ["Reviews"],
         "parameters": [
           {"$ref": "#/components/parameters/IncludeSuperseded"},
+          {"$ref": "#/components/parameters/IncludeHidden"},
           {"$ref": "#/components/parameters/Cursor"},
           {"$ref": "#/components/parameters/Limit"}
         ],
@@ -629,6 +630,33 @@
         "responses": {
           "200": {
             "description": "The finalized review.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Review"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "422": {"$ref": "#/components/responses/ValidationError"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/reviews/{reviewId}/visibility": {
+      "parameters": [
+        {"$ref": "#/components/parameters/ReviewId"}
+      ],
+      "patch": {
+        "operationId": "updateReviewVisibility",
+        "tags": ["Reviews"],
+        "description": "Hide or restore a final or superseded review without modifying its historical content or status.",
+        "requestBody": {"$ref": "#/components/requestBodies/ReviewVisibility"},
+        "responses": {
+          "200": {
+            "description": "The review with its updated visibility metadata and revision.",
             "content": {
               "application/json": {
                 "schema": {"$ref": "#/components/schemas/Review"}
@@ -1010,6 +1038,13 @@
         "required": false,
         "schema": {"type": "boolean", "default": false}
       },
+      "IncludeHidden": {
+        "name": "includeHidden",
+        "in": "query",
+        "required": false,
+        "description": "Include hidden review histories. Hidden reviews are excluded by default.",
+        "schema": {"type": "boolean", "default": false}
+      },
       "CategoryIdQuery": {
         "name": "categoryId",
         "in": "query",
@@ -1207,6 +1242,14 @@
         "content": {
           "application/json": {
             "schema": {"$ref": "#/components/schemas/FinalizeReview"}
+          }
+        }
+      },
+      "ReviewVisibility": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/ReviewVisibility"}
           }
         }
       },
@@ -1636,6 +1679,15 @@
           }
         }
       },
+      "ReviewVisibility": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hidden", "revision"],
+        "properties": {
+          "hidden": {"type": "boolean"},
+          "revision": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
       "Reviewer": {
         "type": "object",
         "additionalProperties": false,
@@ -1669,6 +1721,7 @@
           "createdAt": {"type": "string", "format": "date-time"},
           "updatedAt": {"type": "string", "format": "date-time"},
           "status": {"type": "string", "enum": ["draft", "final", "superseded"]},
+          "hiddenAt": {"type": ["string", "null"], "format": "date-time"},
           "supersedesReviewId": {"type": "string", "format": "uuid"},
           "scores": {
             "type": "array",
@@ -1851,7 +1904,11 @@
         "required": ["format", "formatVersion", "exportedAt", "data"],
         "properties": {
           "format": {"type": "string", "const": "review-engine"},
-          "formatVersion": {"type": "string", "const": "1.0"},
+          "formatVersion": {
+            "type": "string",
+            "enum": ["1.0", "1.1"],
+            "description": "Exports use 1.1. Imports also accept 1.0, treating reviews without hidden_at as visible."
+          },
           "exportedAt": {"type": "string", "format": "date-time"},
           "data": {"$ref": "#/components/schemas/PortableData"}
         }

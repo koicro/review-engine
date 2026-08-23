@@ -29,6 +29,7 @@ internal const val MAX_IMPORT_ERRORS: Int = 100
 internal const val MAX_CRITERIA_PER_TEMPLATE: Int = 100
 internal const val MAX_IMPORT_NAME_LENGTH: Int = 256
 internal const val MAX_IMPORT_DESCRIPTION_LENGTH: Int = 16_384
+private val SUPPORTED_IMPORT_FORMAT_VERSIONS: Set<String> = setOf("1.0", EXPORT_FORMAT_VERSION)
 
 private const val MAX_IMPORT_IDENTIFIER_LENGTH: Int = 64
 private const val MAX_IMPORT_DECIMAL_LENGTH: Int = 128
@@ -85,11 +86,11 @@ fun ReviewEngine.validateImport(payload: JsonElement): ImportValidation {
     val format = root["format"]?.asString()
     if (format != "review-engine") errors.addIssue("$.format", "INVALID_FORMAT", "Expected review-engine")
     val formatVersion = root["formatVersion"]?.asString().orEmpty()
-    if (formatVersion != EXPORT_FORMAT_VERSION) {
+    if (formatVersion !in SUPPORTED_IMPORT_FORMAT_VERSIONS) {
         errors.addIssue(
             "$.formatVersion",
             "UNSUPPORTED_VERSION",
-            "Only format version $EXPORT_FORMAT_VERSION is supported",
+            "Supported format versions are ${SUPPORTED_IMPORT_FORMAT_VERSIONS.sorted().joinToString()}",
         )
     }
     val data = root["data"] as? JsonObject
@@ -120,9 +121,11 @@ fun ReviewEngine.validateImport(payload: JsonElement): ImportValidation {
                     if (row !is JsonObject) {
                         errors.addIssue(path, "INVALID_ROW", "Row must be an object")
                     } else {
-                        val expected = allowedColumns.getValue(table)
-                        val missing = expected - row.keys
-                        val unknown = row.keys - expected
+                        val schema = portableSchema.getValue(table)
+                        val required = schema.filterValues { it.required }.keys +
+                            if (table == "review" && formatVersion != "1.0") setOf("hidden_at") else emptySet()
+                        val missing = required - row.keys
+                        val unknown = row.keys - schema.keys
                         if (missing.isNotEmpty()) {
                             errors.addIssue(path, "MISSING_COLUMNS", "Missing columns: ${missing.sorted().joinToString()}")
                         }
@@ -239,18 +242,23 @@ private fun requireEmptyForImport(connection: Connection) {
 private fun insertRow(connection: Connection, table: String, row: JsonObject) {
     val schema = portableSchema.getValue(table)
     val columns = schema.keys.toList()
-    if (row.keys != schema.keys) {
-        val missing = schema.keys - row.keys
+    val missing = schema.filterValues { it.required }.keys - row.keys
+    val unknown = row.keys - schema.keys
+    if (missing.isNotEmpty() || unknown.isNotEmpty()) {
         throw DomainException(
             DomainErrorCode.IMPORT_INVALID,
             "Import row columns do not match the schema",
-            mapOf("table" to table, "missing" to missing.joinToString(",")),
+            mapOf(
+                "table" to table,
+                "missing" to missing.joinToString(","),
+                "unknown" to unknown.joinToString(","),
+            ),
         )
     }
     val placeholders = columns.joinToString(",") { "?" }
     connection.prepareStatement("INSERT INTO $table(${columns.joinToString(",")}) VALUES ($placeholders)").use { statement ->
         columns.forEachIndexed { index, column ->
-            val value = row.getValue(column)
+            val value = row[column] ?: JsonNull
             when {
                 value is JsonNull -> statement.setObject(index + 1, null)
                 schema.getValue(column).kind == PortableKind.UUID -> statement.setString(
@@ -384,6 +392,11 @@ private fun validateImportedSemantics(connection: Connection) {
             """.trimIndent(),
         ).use { result ->
             if (result.next()) conflict("A review must use a published or retired template from its entity category", "reviewId" to result.getString(1))
+        }
+        statement.executeQuery(
+            "SELECT id FROM review WHERE status = 'draft' AND hidden_at IS NOT NULL LIMIT 1",
+        ).use { result ->
+            if (result.next()) conflict("Draft reviews cannot be hidden", "reviewId" to result.getString(1))
         }
         statement.executeQuery(
             """
@@ -547,6 +560,7 @@ private enum class PortableKind { TEXT, UUID, INSTANT, INTEGER }
 private data class PortableColumn(
     val kind: PortableKind,
     val nullable: Boolean = false,
+    val required: Boolean = true,
     val maxLength: Int? = null,
     val nonBlank: Boolean = false,
     val minimumValue: Long? = null,
@@ -559,7 +573,13 @@ private fun portableText(
     nullable: Boolean = false,
     nonBlank: Boolean = false,
     allowedValues: Set<String>? = null,
-) = PortableColumn(PortableKind.TEXT, nullable, maxLength, nonBlank, allowedValues = allowedValues)
+) = PortableColumn(
+    kind = PortableKind.TEXT,
+    nullable = nullable,
+    maxLength = maxLength,
+    nonBlank = nonBlank,
+    allowedValues = allowedValues,
+)
 
 private fun portableUuid(nullable: Boolean = false) = PortableColumn(
     kind = PortableKind.UUID,
@@ -567,9 +587,10 @@ private fun portableUuid(nullable: Boolean = false) = PortableColumn(
     maxLength = 36,
 )
 
-private fun portableInstant(nullable: Boolean = false) = PortableColumn(
+private fun portableInstant(nullable: Boolean = false, required: Boolean = true) = PortableColumn(
     kind = PortableKind.INSTANT,
     nullable = nullable,
+    required = required,
     maxLength = MAX_IMPORT_TIMESTAMP_LENGTH,
 )
 
@@ -649,6 +670,8 @@ private val portableSchema = mapOf(
         "created_at" to portableInstant(),
         "updated_at" to portableInstant(),
         "lock_version" to portableInteger(),
+        // Added in schema migration V002. Missing means visible for exports made before V002.
+        "hidden_at" to portableInstant(nullable = true, required = false),
     ),
     "score" to linkedMapOf(
         "review_id" to portableUuid(),
@@ -671,5 +694,3 @@ private val portableSchema = mapOf(
         "created_at" to portableInstant(),
     ),
 )
-
-private val allowedColumns = portableSchema.mapValues { (_, columns) -> columns.keys }

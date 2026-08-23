@@ -39,6 +39,7 @@ import dev.reviewengine.application.revokeBrowserSession
 import dev.reviewengine.application.updateCategory
 import dev.reviewengine.application.updateEntity
 import dev.reviewengine.application.updateReview
+import dev.reviewengine.application.updateReviewVisibility
 import dev.reviewengine.application.updateTemplateDraft
 import dev.reviewengine.application.validateImport
 import dev.reviewengine.application.ReviewEngine
@@ -221,6 +222,7 @@ internal fun Application.configureRoutes(engine: ReviewEngine, config: AppConfig
                                     engine.listReviews(
                                         call.pathUuid("entityId"),
                                         includeSuperseded = call.booleanQuery("includeSuperseded", false),
+                                        includeHidden = call.booleanQuery("includeHidden", false),
                                         cursor = call.request.queryParameters["cursor"],
                                         limit = call.intQuery("limit"),
                                     ).dto { it.dto() },
@@ -278,6 +280,10 @@ internal fun Application.configureRoutes(engine: ReviewEngine, config: AppConfig
                             HttpStatusCode.Created,
                             engine.reviseReview(call.pathUuid("reviewId"), body.input(UUID.fromString(DEFAULT_REVIEWER_ID))).dto(),
                         )
+                    }
+                    patch("/visibility") {
+                        val body = call.receive<ReviewVisibilityDto>()
+                        call.respond(engine.updateReviewVisibility(call.pathUuid("reviewId"), body.input()).dto())
                     }
                 }
 

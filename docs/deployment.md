@@ -17,7 +17,7 @@ The Compose file requires an explicit administrator token and binds the publishe
 
 ## Persistent storage
 
-Mount a persistent volume at `/data`. The application container otherwise runs with a read-only root filesystem and only needs a small writable `/tmp`. The process writes structured logs to standard output.
+Mount a persistent volume at `/data`. The application container otherwise runs with a read-only root filesystem and only needs a small writable `/tmp`. That temporary filesystem must permit executable mappings because `sqlite-jdbc` extracts its ephemeral, architecture-specific JNI library there. The supplied Compose configuration keeps the mount size-bounded with `nosuid` and `nodev` while allowing that mapping. The process writes structured logs to standard output.
 
 SQLite works best when `/data` is backed by a local filesystem. Avoid network filesystems whose locking semantics are not explicitly compatible with SQLite. Run one application replica against a database file.
 
