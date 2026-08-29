@@ -147,7 +147,7 @@ describe('ApiClient', () => {
     }));
   });
 
-  it('uploads and deletes review pictures with optimistic revisions', async () => {
+  it('uploads pictures sequentially as raw files and carries optimistic revisions', async () => {
     const review = {
       id: 'review-1',
       entityId: 'entity-1',
@@ -160,25 +160,58 @@ describe('ApiClient', () => {
       revision: 5,
     };
     const fetchImpl = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse(review, { status: 201 }))
-      .mockResolvedValueOnce(jsonResponse({ ...review, revision: 6 }));
-    const client = new ApiClient({ fetchImpl });
+      .mockResolvedValueOnce(jsonResponse({ ...review, revision: 5 }, { status: 201 }))
+      .mockResolvedValueOnce(jsonResponse({ ...review, revision: 6 }, { status: 201 }))
+      .mockResolvedValueOnce(jsonResponse({ ...review, revision: 7 }));
+    const client = new ApiClient({ token: 'picture-token', fetchImpl });
     const first = new File(['first'], 'first.jpg', { type: 'image/jpeg' });
-    const second = new File(['second'], 'second.png', { type: 'image/png' });
+    const second = new File(['second'], 'label & back.png', { type: 'image/png' });
 
-    await client.uploadReviewPictures('review-1', [first, second], 4);
+    const uploaded = await client.uploadReviewPictures('review-1', [first, second], 4);
     await client.deleteReviewPicture('review-1', 'picture-1', 5);
 
-    const [uploadUrl, uploadInit] = fetchImpl.mock.calls[0]!;
-    expect(uploadUrl).toBe('/api/v1/reviews/review-1/pictures');
-    expect(uploadInit?.method).toBe('POST');
-    expect(new Headers(uploadInit?.headers).get('content-type')).toBeNull();
-    expect(uploadInit?.body).toBeInstanceOf(FormData);
-    const form = uploadInit?.body as FormData;
-    expect(form.get('revision')).toBe('4');
-    expect(form.getAll('pictures')).toEqual([first, second]);
-    expect(fetchImpl.mock.calls[1]?.[0]).toBe('/api/v1/reviews/review-1/pictures/picture-1?revision=5');
-    expect(fetchImpl.mock.calls[1]?.[1]?.method).toBe('DELETE');
+    expect(uploaded.revision).toBe(6);
+    const [firstUrl, firstInit] = fetchImpl.mock.calls[0]!;
+    expect(firstUrl).toBe('/api/v1/reviews/review-1/pictures?revision=4&fileName=first.jpg');
+    expect(firstInit).toEqual(expect.objectContaining({
+      method: 'POST',
+      body: first,
+      credentials: 'same-origin',
+    }));
+    expect(new Headers(firstInit?.headers)).toEqual(expect.objectContaining({}));
+    expect(new Headers(firstInit?.headers).get('content-type')).toBe('image/jpeg');
+    expect(new Headers(firstInit?.headers).get('authorization')).toBe('Bearer picture-token');
+
+    const [secondUrl, secondInit] = fetchImpl.mock.calls[1]!;
+    expect(secondUrl).toBe('/api/v1/reviews/review-1/pictures?revision=5&fileName=label+%26+back.png');
+    expect(secondInit).toEqual(expect.objectContaining({
+      method: 'POST',
+      body: second,
+      credentials: 'same-origin',
+    }));
+    expect(new Headers(secondInit?.headers).get('content-type')).toBe('image/png');
+    expect(fetchImpl.mock.calls[2]?.[0]).toBe('/api/v1/reviews/review-1/pictures/picture-1?revision=5');
+    expect(fetchImpl.mock.calls[2]?.[1]?.method).toBe('DELETE');
+  });
+
+  it('stops sequential picture uploads and preserves unauthorized handling', async () => {
+    const onUnauthorized = vi.fn();
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ revision: 8 }, { status: 201 }))
+      .mockResolvedValueOnce(jsonResponse({ code: 'UNAUTHORIZED' }, { status: 401 }));
+    const client = new ApiClient({ fetchImpl, onUnauthorized });
+    const pictures = [
+      new File(['one'], 'one.jpg', { type: 'image/jpeg' }),
+      new File(['two'], 'two.jpg', { type: 'image/jpeg' }),
+      new File(['three'], 'three.jpg', { type: 'image/jpeg' }),
+    ];
+
+    const error = await client.uploadReviewPictures('review-1', pictures, 7).catch((cause) => cause);
+
+    expect(error).toMatchObject({ status: 401, code: 'UNAUTHORIZED' });
+    expect(onUnauthorized).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('/api/v1/reviews/review-1/pictures?revision=8&fileName=two.jpg');
   });
 
   it('serializes template scale values as exact decimal strings', async () => {

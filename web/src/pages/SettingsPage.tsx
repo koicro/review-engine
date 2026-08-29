@@ -139,7 +139,7 @@ export function SettingsPage() {
         )}
       </Card>
       <Card className="developer-card"><div><p className="eyebrow">{en.settings.developers}</p><h2>{en.settings.buildApi}</h2><p>{en.settings.apiDescription}</p></div><a className="button button-secondary" href={openApiUrl} target="_blank" rel="noreferrer">{en.settings.openApi}</a></Card>
-      <Card className="deployment-card"><p className="eyebrow">{en.settings.deployment}</p><h2>{en.settings.runtimeControls}</h2><dl><div><dt>{en.settings.referenceUi}</dt><dd>{en.settings.headlessPrefix} <code>REVIEW_UI_ENABLED=false</code> {en.settings.headlessSuffix}</dd></div><div><dt>{en.settings.persistence}</dt><dd>{en.settings.persistenceDescription}</dd></div><div><dt>{en.settings.authentication}</dt><dd>{en.settings.authenticationPrefix} <code>REVIEW_ADMIN_TOKEN</code> {en.settings.authenticationSuffix}</dd></div></dl></Card>
+      <Card className="deployment-card"><p className="eyebrow">{en.settings.deployment}</p><h2>{en.settings.runtimeControls}</h2><dl><div><dt>{en.settings.runtime}</dt><dd>{en.settings.runtimeDescription}</dd></div><div><dt>{en.settings.persistence}</dt><dd>{en.settings.persistenceDescription}</dd></div><div><dt>{en.settings.authentication}</dt><dd>{en.settings.authenticationDescription}</dd></div></dl></Card>
     </div>
   );
 }

@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "review-engine",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2026-08-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./web/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/openapi.json"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "review-engine-db",
+      "database_id": "ba9b28e1-4d2e-4550-9420-0626e4323ff4"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "PICTURES",
+      "bucket_name": "review-engine-pictures"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  }
+}

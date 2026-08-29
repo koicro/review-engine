@@ -1,0 +1,27 @@
+{
+  "name": "review-engine-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm --prefix web run build",
+    "check": "tsc --noEmit",
+    "cloudflare:whoami": "wrangler whoami",
+    "deploy": "npm run build && wrangler deploy",
+    "dev": "npm run build && wrangler dev",
+    "test": "vitest run",
+    "test:web": "npm --prefix web test",
+    "types": "wrangler types --env-file .dev.vars.example --include-runtime false worker-configuration.d.ts",
+    "types:check": "wrangler types --env-file .dev.vars.example --include-runtime false --check worker-configuration.d.ts",
+    "verify": "npm run types:check && npm run check && npm test && npm run test:web && npm run build"
+  },
+  "dependencies": {
+    "decimal.js": "^10.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260828.1",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.127.0"
+  }
+}

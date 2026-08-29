@@ -1,53 +1,58 @@
-# Deployment
+# Cloudflare deployment
 
-The supported deployment unit is the OCI image. It contains the API, database migrations, reference UI, and JVM runtime, and runs as the non-root user `10001:10001`.
+The supported production runtime is one Cloudflare Worker with three bindings:
 
-## Configuration
-
-| Variable | Default | Purpose |
+| Binding | Resource | Purpose |
 | --- | --- | --- |
-| `REVIEW_HTTP_HOST` | `0.0.0.0` | Interface bound inside the container |
-| `REVIEW_HTTP_PORT` | `8080` | Port bound inside the container |
-| `REVIEW_DATABASE_PATH` | `/data/review-engine.db` | SQLite database path |
-| `REVIEW_PICTURE_PATH` | `review-pictures` beside the database | Directory for immutable review-picture assets |
-| `REVIEW_UI_ENABLED` | `true` | Set to `false` for the headless API configuration |
-| `REVIEW_ADMIN_TOKEN` | none in the image | Token used for administrative and write operations |
-| `REVIEW_PUBLIC_ORIGIN` | direct request origin | Browser-facing HTTP(S) origin, without a path; required behind TLS or a reverse proxy |
+| `DB` | D1 database | Relational application and authorization data |
+| `PICTURES` | R2 bucket | Review-picture bytes |
+| `ASSETS` | Workers Static Assets | Built React application |
 
-The Compose file requires an explicit administrator token and binds the published port to localhost by default. Copy `.env.example` to `.env`, replace its placeholder, and keep that file out of version control. Pass secrets through the platform's secret manager where one is available.
+`wrangler.jsonc` is the deployment source of truth. It enables observability, routes `/api/*` through the Worker, and falls back to `index.html` for client-side navigation.
 
-## Persistent storage
+## First deployment
 
-Mount a persistent volume at `/data`. It contains both the SQLite database and review pictures, which default to `/data/review-pictures` in the packaged image. Treat that complete volume as one backup unit: database metadata without its matching picture directory is incomplete. The application container otherwise runs with a read-only root filesystem and only needs a small writable `/tmp`. That temporary filesystem must permit executable mappings because `sqlite-jdbc` extracts its ephemeral, architecture-specific JNI library there. The supplied Compose configuration keeps the mount size-bounded with `nosuid` and `nodev` while allowing that mapping. The process writes structured logs to standard output.
+1. Install dependencies with `npm ci` and `npm --prefix web ci`.
+2. Authenticate with `npx wrangler login`.
+3. Create the D1 database and R2 bucket if they do not exist.
+4. Put the resulting D1 identifier and resource names in `wrangler.jsonc`.
+5. Apply the schema with `npx wrangler d1 migrations apply review-engine-db --remote`.
+6. Deploy with `npm run deploy`.
+7. Store a random, production-only administrator credential of at least 32 characters with `npx wrangler secret put REVIEW_ADMIN_TOKEN`.
+8. Verify `/api/v1/health/ready`, sign in, and exercise a representative protected read and write.
 
-SQLite works best when `/data` is backed by a local filesystem. Avoid network filesystems whose locking semantics are not explicitly compatible with SQLite. Run one application replica against a database file.
+Never place administrator credentials, API tokens, or R2 credentials in committed files. Browser sessions are 12-hour opaque cookies whose fingerprints are stored in D1. Cookies are `HttpOnly`, `Secure`, `SameSite=Strict`, and scoped to `/api/v1`; unsafe cookie-authenticated requests must carry the deployment’s exact request origin.
 
-## Browser sessions and reverse proxy
+## Local development
 
-The reference UI exchanges the administrator token once for a 12-hour opaque browser session. Only a hash of the session ID is stored. Its cookie is `HttpOnly`, `SameSite=Strict`, scoped to `/api/v1`, and marked `Secure` whenever `REVIEW_PUBLIC_ORIGIN` uses HTTPS. Unsafe cookie-authenticated requests must carry that exact origin. Explicit bearer tokens remain available for API clients.
+Copy `.dev.vars.example` to `.dev.vars`, choose a local administrator credential, and run:
 
-Terminate TLS at a trusted reverse proxy, preserve the request host, and set `REVIEW_PUBLIC_ORIGIN` to the exact browser-facing origin, for example `https://reviews.example.com`. The MVP does not trust identity headers from a proxy. Public read-only access is not implemented, so keep the service private.
+```sh
+npx wrangler d1 migrations apply review-engine-db --local
+npm run dev
+```
 
-## Health checks
+Local D1 and R2 state lives under Wrangler’s ignored working directory. The production identifiers in `wrangler.jsonc` are not contacted unless `--remote` is explicitly supplied.
 
-- `/api/v1/health/live` reports whether the process can serve requests.
-- `/api/v1/health/ready` becomes successful after initialization and migrations complete and the database is usable.
+## Health and observability
 
-Readiness should control traffic. Liveness should only restart an unresponsive process; it should not depend on optional external systems.
+- `/api/v1/health/live` confirms the Worker can execute.
+- `/api/v1/health/ready` confirms the administrator credential is configured and D1 can answer a query.
+- API responses include an `X-Request-Id`.
+- Structured completion and failure events are available in Workers observability logs.
+
+R2 is checked when picture content is read or written; its availability is intentionally not part of general D1 readiness. Failed object deletions remain in a D1 outbox and the scheduled Worker retries up to 20 keys every 15 minutes.
 
 ## Upgrades
 
-Until the first declared schema baseline is released, development database files are not covered by an upgrade-compatibility guarantee. If you have persisted data from an earlier development snapshot, create and validate a JSON export with that build, then restore it into a fresh database with the current build. Do not assume that an edited pre-release `V001` migration will be reapplied to a database that already recorded migration 1.
+1. Run `npm run verify`.
+2. Create one maintenance-window recovery point for D1 and R2 using [the backup runbook](backup-and-restore.md). Expect D1 export to interrupt database requests briefly.
+3. Apply pending D1 migrations remotely.
+4. Deploy the Worker and static assets.
+5. Confirm readiness and representative reads before making a write.
 
-1. Read the release notes and migration notes.
-2. Create and verify a backup.
-3. Pull the new image by immutable version tag.
-4. Stop the old container cleanly.
-5. Start the new image with the same `/data` volume and configuration.
-6. Wait for readiness, then verify representative reads and writes.
+D1 migrations are forward-only. Roll back application code only when it remains compatible with the migrated schema; otherwise restore into newly provisioned resources and switch the bindings after verification.
 
-Do not downgrade a database after a migration unless that release explicitly documents a safe downgrade path. Roll back by restoring the pre-upgrade backup into a fresh volume.
+## Legacy container
 
-## Multi-architecture releases
-
-Pushing a `v*` Git tag runs the release workflow and publishes `linux/amd64` and `linux/arm64` manifests to GitHub Container Registry. Release tags should be immutable and follow semantic versioning.
+The Kotlin/SQLite container remains in the repository as a local fallback and migration source. It is not the production deployment unit. Keep its stopped volume until the Cloudflare cutover and backups have been verified.

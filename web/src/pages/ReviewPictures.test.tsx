@@ -99,24 +99,27 @@ describe('review pictures', () => {
   });
 
   it('saves selected pictures to a draft before finalizing it', async () => {
-    const writes: Array<{ path: string; body?: BodyInit | null }> = [];
+    const writes: Array<{ path: string; query: string; body?: BodyInit | null }> = [];
     let listedReviews: Review[] = [];
+    let uploadCount = 0;
     const draft = review('draft', [], 1);
-    const uploaded = review('draft', [picture('picture-1', 'front.jpg'), picture('picture-2', 'label.png')], 2);
-    const finalized = review('final', uploaded.pictures, 3);
+    const firstUpload = review('draft', [picture('picture-1', 'front.jpg')], 2);
+    const uploaded = review('draft', [picture('picture-1', 'front.jpg'), picture('picture-2', 'label.png')], 3);
+    const finalized = review('final', uploaded.pictures, 4);
 
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), 'http://review-engine.test');
       if (url.pathname.endsWith('/entities/entity-1/reviews') && init?.method === 'POST') {
-        writes.push({ path: url.pathname, body: init.body });
+        writes.push({ path: url.pathname, query: url.search, body: init.body });
         return json(draft, { status: 201 });
       }
       if (url.pathname.endsWith('/reviews/review-1/pictures') && init?.method === 'POST') {
-        writes.push({ path: url.pathname, body: init.body });
-        return json(uploaded, { status: 201 });
+        writes.push({ path: url.pathname, query: url.search, body: init.body });
+        uploadCount += 1;
+        return json(uploadCount === 1 ? firstUpload : uploaded, { status: 201 });
       }
       if (url.pathname.endsWith('/reviews/review-1/finalize') && init?.method === 'POST') {
-        writes.push({ path: url.pathname, body: init.body });
+        writes.push({ path: url.pathname, query: url.search, body: init.body });
         listedReviews = [finalized];
         return json(finalized);
       }
@@ -140,13 +143,15 @@ describe('review pictures', () => {
     expect(writes.map((write) => write.path)).toEqual([
       '/api/v1/entities/entity-1/reviews',
       '/api/v1/reviews/review-1/pictures',
+      '/api/v1/reviews/review-1/pictures',
       '/api/v1/reviews/review-1/finalize',
     ]);
     expect(JSON.parse(String(writes[0]?.body))).toMatchObject({ finalize: false });
-    const form = writes[1]?.body as FormData;
-    expect(form.get('revision')).toBe('1');
-    expect((form.getAll('pictures') as File[]).map((file) => file.name)).toEqual(['front.jpg', 'label.png']);
-    expect(JSON.parse(String(writes[2]?.body))).toMatchObject({ revision: 2 });
+    expect(writes[1]?.query).toBe('?revision=1&fileName=front.jpg');
+    expect(writes[1]?.body).toBe(first);
+    expect(writes[2]?.query).toBe('?revision=2&fileName=label.png');
+    expect(writes[2]?.body).toBe(second);
+    expect(JSON.parse(String(writes[3]?.body))).toMatchObject({ revision: 3 });
     expect(await screen.findByRole('link', { name: 'Open front.jpg' })).toBeInTheDocument();
   });
 

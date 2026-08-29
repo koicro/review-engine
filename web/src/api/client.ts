@@ -126,7 +126,7 @@ export class ApiClient {
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set('Accept', 'application/json');
-    if (init.body !== undefined && !(init.body instanceof FormData)) {
+    if (init.body !== undefined && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/json');
     }
     if (this.token) headers.set('Authorization', `Bearer ${this.token}`);
@@ -312,14 +312,26 @@ export class ApiClient {
     });
   }
 
-  uploadReviewPictures(reviewId: Id, pictures: File[], revision: number) {
-    const body = new FormData();
-    body.append('revision', String(revision));
-    pictures.forEach((picture) => body.append('pictures', picture, picture.name));
-    return this.request<Review>(`/reviews/${reviewId}/pictures`, {
-      method: 'POST',
-      body,
-    });
+  async uploadReviewPictures(reviewId: Id, pictures: File[], revision: number): Promise<Review> {
+    if (pictures.length === 0) throw new TypeError('At least one picture is required.');
+
+    let currentRevision = revision;
+    let currentReview: Review | undefined;
+    for (const picture of pictures) {
+      currentReview = await this.request<Review>(
+        `/reviews/${reviewId}/pictures${buildQuery({
+          revision: currentRevision,
+          fileName: picture.name,
+        })}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': picture.type || 'application/octet-stream' },
+          body: picture,
+        },
+      );
+      currentRevision = currentReview.revision;
+    }
+    return currentReview!;
   }
 
   deleteReviewPicture(reviewId: Id, pictureId: Id, revision: number) {
