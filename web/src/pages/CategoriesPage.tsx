@@ -317,6 +317,7 @@ function CriterionEditor({ version, onSaved, onPublished, onError }: { version: 
   const { api } = useApi();
   const [criteria, setCriteria] = useState(version.criteria.length ? version.criteria : [freshCriterion(0)]);
   const [properties, setProperties] = useState<PropertyDefinition[]>(version.properties || []);
+  const [propertyOptionDrafts, setPropertyOptionDrafts] = useState<Record<string, string>>(() => Object.fromEntries((version.properties || []).map((property) => [property.id, property.options.join(', ')])));
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const validation = useMemo(() => [...validateCriteria(criteria), ...validateProperties(properties)], [criteria, properties]);
@@ -341,7 +342,7 @@ function CriterionEditor({ version, onSaved, onPublished, onError }: { version: 
     setSaving(true);
     onError('');
     try {
-      const saved = await api.updateTemplateDraft(version.id, { criteria: criteria.map((item, position) => ({ ...item, position })), properties: properties.map((item, position) => ({ ...item, position })), revision: version.revision });
+      const saved = await api.updateTemplateDraft(version.id, { criteria: criteria.map((item, position) => ({ ...item, position })), properties: properties.map((item, position) => ({ ...item, options: (propertyOptionDrafts[item.id] ?? item.options.join(', ')).split(',').map((option) => option.trim()).filter(Boolean), position })), revision: version.revision });
       onSaved(saved);
       return saved;
     } catch (cause) { onError(explainError(cause)); return undefined; }
@@ -388,12 +389,12 @@ function CriterionEditor({ version, onSaved, onPublished, onError }: { version: 
       <div className="property-list">
         {properties.map((property, index) => <article className="property-card" key={property.id}>
           <div className="form-grid two-column"><Field label={en.categories.propertyName} required><input value={property.name} onChange={(event) => setProperties((items) => items.map((item) => item.id === property.id ? { ...item, name: event.target.value } : item))} placeholder={en.categories.propertyNamePlaceholder} /></Field><Field label={en.categories.propertyType}><select value={property.type} onChange={(event) => setProperties((items) => items.map((item) => item.id === property.id ? { ...item, type: event.target.value as PropertyType, options: event.target.value === 'select' ? item.options : [] } : item))}><option value="text">{en.categories.propertyText}</option><option value="select">{en.categories.propertySelect}</option><option value="checkbox">{en.categories.propertyCheckbox}</option></select></Field></div>
-          {property.type === 'select' && <Field label={en.categories.propertyOptions} hint={en.categories.propertyOptionsHint}><input value={property.options.join(', ')} onChange={(event) => setProperties((items) => items.map((item) => item.id === property.id ? { ...item, options: event.target.value.split(',').map((option) => option.trim()).filter(Boolean) } : item))} placeholder={en.categories.propertyOptionsPlaceholder} /></Field>}
+          {property.type === 'select' && <Field label={en.categories.propertyOptions} hint={en.categories.propertyOptionsHint}><input value={propertyOptionDrafts[property.id] ?? property.options.join(', ')} onChange={(event) => { const raw = event.target.value; setPropertyOptionDrafts((drafts) => ({ ...drafts, [property.id]: raw })); setProperties((items) => items.map((item) => item.id === property.id ? { ...item, options: raw.split(',').map((option) => option.trim()).filter(Boolean) } : item)); }} placeholder={en.categories.propertyOptionsPlaceholder} /></Field>}
           <label className="check-field"><input type="checkbox" checked={property.required} onChange={(event) => setProperties((items) => items.map((item) => item.id === property.id ? { ...item, required: event.target.checked } : item))} /><span><strong>{en.common.required}</strong><small>{en.categories.propertyRequiredHint}</small></span></label>
-          <button type="button" className="icon-button danger" onClick={() => setProperties((items) => items.filter((item) => item.id !== property.id).map((item, position) => ({ ...item, position })))} aria-label={en.categories.removeProperty(property.name || `property ${index + 1}`)}>×</button>
+          <button type="button" className="icon-button danger" onClick={() => { setPropertyOptionDrafts((drafts) => { const next = { ...drafts }; delete next[property.id]; return next; }); setProperties((items) => items.filter((item) => item.id !== property.id).map((item, position) => ({ ...item, position }))); }} aria-label={en.categories.removeProperty(property.name || `property ${index + 1}`)}>×</button>
         </article>)}
       </div>
-      <button type="button" className="add-row-button" onClick={() => setProperties((items) => [...items, freshProperty(items.length)])}>{en.categories.addProperty}</button>
+      <button type="button" className="add-row-button" onClick={() => { const property = freshProperty(properties.length); setProperties((items) => [...items, property]); setPropertyOptionDrafts((drafts) => ({ ...drafts, [property.id]: '' })); }}>{en.categories.addProperty}</button>
       <div className="form-actions sticky-actions"><Button variant="secondary" onClick={() => void saveDraft()} disabled={saving || publishing || validation.length > 0}>{saving ? en.categories.saving : en.categories.saveDraft}</Button><Button onClick={() => void publish()} disabled={saving || publishing || validation.length > 0}>{publishing ? en.categories.publishing : en.categories.publishTemplate}</Button></div>
     </div>
   );
