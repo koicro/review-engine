@@ -1,5 +1,5 @@
 import { ApiError } from './api/client';
-import { explainError } from './lib';
+import { averageScore, explainError } from './lib';
 
 describe('explainError', () => {
   it('maps stable API codes to recovery guidance without exposing server text', () => {
@@ -27,5 +27,12 @@ describe('explainError', () => {
 
     expect(explanation).toMatch(/3 pictures/i);
     expect(explanation).toMatch(/100 MB/i);
+  });
+});
+
+describe('averageScore', () => {
+  it('averages numeric score values and ignores missing values', () => {
+    expect(averageScore(['2', 4, null])).toBe(3);
+    expect(averageScore([])).toBeNull();
   });
 });

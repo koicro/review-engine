@@ -47,7 +47,10 @@ function review(id: string, status: Review['status'], reviewerName: string): Rev
     createdAt: '2026-01-01T00:00:00Z',
     status,
     pictures: [],
-    scores: [],
+    scores: status === 'final' ? [
+      { criterionId: 'criterion-1', criterionName: 'Taste', tickIndex: 2, displayValue: '2' },
+      { criterionId: 'criterion-2', criterionName: 'Aroma', tickIndex: 4, displayValue: '4' },
+    ] : [],
     revision: 0,
   };
 }
@@ -91,6 +94,8 @@ describe('paged workflows', () => {
     render(<ApiProvider><EntitiesPage /></ApiProvider>);
 
     expect(await screen.findByText(/by New reviewer/i)).toBeInTheDocument();
+    expect(screen.getByText('Average score')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
     expect(screen.queryByText(/by Older reviewer/i)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /load older reviews/i }));
 

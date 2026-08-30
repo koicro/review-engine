@@ -26,6 +26,15 @@ export function formatScore(value?: string | number | null): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 }).format(numeric);
 }
 
+export function averageScore(values: Array<string | number | null | undefined>): number | null {
+  const numericValues = values
+    .filter((value) => value !== null && value !== undefined && value !== '')
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+  if (numericValues.length === 0) return null;
+  return numericValues.reduce((sum, value) => sum + value, 0) / numericValues.length;
+}
+
 export function toLocalDateTimeInput(value = new Date()): string {
   const local = new Date(value.getTime() - value.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);

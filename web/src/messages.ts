@@ -377,6 +377,7 @@ export const en = {
     loadingHistory: 'Loading review history',
     timeline: 'Timeline',
     reviewHistory: 'Review history',
+    averageScore: 'Average score',
     finalObservations: (count: number, partial: boolean) => `${count} final observations${partial ? ' loaded' : ''}`,
     showHiddenReviews: 'Show hidden',
     recordReview: 'Record review',

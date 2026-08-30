@@ -3,7 +3,7 @@ import { useApi } from '../api/context';
 import type { Category, Entity, Review, ReviewInput, ReviewPicture, TemplateVersion } from '../api/types';
 import { ScoreInput } from '../components/ScoreInput';
 import { Badge, Button, Card, Dialog, EmptyState, ErrorPanel, Field, LoadingState, Notice, PageHeader } from '../components/UI';
-import { criterionId, explainError, formatDateTime, formatScore, inputDateTimeToIso, tickDisplay, toLocalDateTimeInput } from '../lib';
+import { averageScore, criterionId, explainError, formatDateTime, formatScore, inputDateTimeToIso, tickDisplay, toLocalDateTimeInput } from '../lib';
 import { en } from '../messages';
 
 export const MAX_REVIEW_PICTURES = 3;
@@ -341,12 +341,18 @@ function ReviewTimeline({ reviews, activeTemplate, visibilityChangingReviewId, o
         const definition = review.templateVersionId === activeTemplate?.id ? activeTemplate : null;
         const hidden = Boolean(review.hiddenAt);
         const className = [review.status === 'superseded' ? 'superseded' : '', hidden ? 'hidden-review' : ''].filter(Boolean).join(' ');
+        const scoreValues = review.scores.map((score) => {
+          const criterion = definition?.criteria.find((item) => criterionId(item) === score.criterionId);
+          return score.displayValue ?? (criterion ? tickDisplay(criterion, score.tickIndex) : null);
+        });
+        const average = averageScore(scoreValues);
         return (
           <li key={review.id} className={className}>
             <div className="timeline-dot" aria-hidden="true" />
             <article>
               <header><div><time dateTime={review.reviewedAt}>{formatDateTime(review.reviewedAt)}</time><span>{en.entities.templateVersion(review.templateVersion?.version ?? definition?.version ?? '?')}</span>{review.reviewer?.displayName && <span>{en.entities.reviewedBy(review.reviewer.displayName)}</span>}</div><div className="review-badges">{hidden && <Badge>{en.entities.hiddenReview}</Badge>}<Badge tone={review.status === 'final' ? 'success' : review.status === 'draft' ? 'warning' : 'neutral'}>{en.common.status(review.status)}</Badge></div></header>
               <div className="review-scores">
+                {average !== null && <div className="review-average"><span>{en.entities.averageScore}</span><strong>{formatScore(average)}</strong></div>}
                 {review.scores.map((score) => {
                   const criterion = definition?.criteria.find((item) => criterionId(item) === score.criterionId);
                   const displayValue = score.displayValue ?? (criterion ? tickDisplay(criterion, score.tickIndex) : score.tickIndex);
