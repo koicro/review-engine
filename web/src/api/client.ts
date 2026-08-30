@@ -205,14 +205,14 @@ export class ApiClient {
     return this.request<TemplateVersion>(`/template-versions/${versionId}`);
   }
 
-  createTemplateDraft(categoryId: Id, criteria?: Criterion[]) {
+  createTemplateDraft(categoryId: Id, criteria?: Criterion[], properties?: TemplateVersion['properties']) {
     return this.request<TemplateVersion>(`/categories/${categoryId}/template-versions`, {
       method: 'POST',
-      body: JSON.stringify(criteria ? { criteria: criteria.map(criterionWrite) } : {}),
+      body: JSON.stringify({ ...(criteria ? { criteria: criteria.map(criterionWrite) } : {}), ...(properties ? { properties } : {}) }),
     });
   }
 
-  updateTemplateDraft(versionId: Id, input: { criteria: Criterion[]; revision: number }) {
+  updateTemplateDraft(versionId: Id, input: { criteria: Criterion[]; properties?: TemplateVersion['properties']; revision: number }) {
     return this.request<TemplateVersion>(`/template-versions/${versionId}`, {
       method: 'PATCH',
       body: JSON.stringify({
@@ -287,7 +287,7 @@ export class ApiClient {
     });
   }
 
-  finalizeReview(reviewId: Id, input: Pick<ReviewInput, 'scores'> & { revision: number }) {
+  finalizeReview(reviewId: Id, input: Pick<ReviewInput, 'scores' | 'properties'> & { revision: number }) {
     return this.request<Review>(`/reviews/${reviewId}/finalize`, {
       method: 'POST',
       body: JSON.stringify(input),

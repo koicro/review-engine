@@ -49,7 +49,11 @@ describe('Review Engine Worker', () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ criteria: [{
         name: 'Flavor', minValue: '0', maxValue: '10', stepValue: '1', position: 0, required: true,
-      }] }),
+      }], properties: [
+        { id: '00000000-0000-0000-0000-000000000101', name: 'Roast notes', type: 'text', options: [], position: 0, required: true },
+        { id: '00000000-0000-0000-0000-000000000102', name: 'Roast level', type: 'select', options: ['Light', 'Dark'], position: 1, required: true },
+        { id: '00000000-0000-0000-0000-000000000103', name: 'Organic', type: 'checkbox', options: [], position: 2, required: false },
+      ] }),
     });
     expect(draftResponse.status).toBe(201);
     const draft = await jsonBody<{ id: string; revision: number; criteria: Array<{ id: string }> }>(draftResponse);
@@ -70,10 +74,21 @@ describe('Review Engine Worker', () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         reviewedAt: new Date().toISOString(), scores: [{ criterionId: draft.criteria[0]!.id, tickIndex: 8 }],
+        properties: [
+          { propertyId: '00000000-0000-0000-0000-000000000101', value: 'Chocolate and caramel' },
+          { propertyId: '00000000-0000-0000-0000-000000000102', value: 'Dark' },
+          { propertyId: '00000000-0000-0000-0000-000000000103', value: true },
+        ],
       }),
     });
     expect(reviewResponse.status).toBe(201);
-    let review = await jsonBody<{ id: string; revision: number }>(reviewResponse);
+    const createdReview = await jsonBody<{ id: string; revision: number; properties: Array<{ propertyId: string; value: string | boolean }> }>(reviewResponse);
+    expect(createdReview.properties).toEqual(expect.arrayContaining([
+      expect.objectContaining({ propertyId: '00000000-0000-0000-0000-000000000101', value: 'Chocolate and caramel' }),
+      expect.objectContaining({ propertyId: '00000000-0000-0000-0000-000000000102', value: 'Dark' }),
+      expect.objectContaining({ propertyId: '00000000-0000-0000-0000-000000000103', value: true }),
+    ]));
+    let review = createdReview;
 
     const correctionA = { reviewedAt: '2026-08-28T00:00:01.000Z', tickIndex: 6 };
     const correctionB = { reviewedAt: '2026-08-28T00:00:02.000Z', tickIndex: 7 };
@@ -88,7 +103,7 @@ describe('Review Engine Worker', () => {
     expect(concurrent.map((response) => response.status).sort()).toEqual([200, 409]);
     const storedReviewResponse = await authorized(`/reviews/${review.id}`);
     const storedReview = await jsonBody<{
-      id: string; revision: number; reviewedAt: string; scores: Array<{ tickIndex: number }>;
+      id: string; revision: number; reviewedAt: string; scores: Array<{ tickIndex: number }>; properties: Array<{ propertyId: string; value: string | boolean }>;
     }>(storedReviewResponse);
     const expectedPair = [correctionA, correctionB].find((correction) => correction.reviewedAt === storedReview.reviewedAt);
     expect(expectedPair).toBeDefined();
@@ -159,7 +174,7 @@ describe('Review Engine Worker', () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(exported),
     });
     expect(validationResponse.status).toBe(200);
-    await expect(validationResponse.json()).resolves.toMatchObject({ valid: true, formatVersion: '1.1' });
+    await expect(validationResponse.json()).resolves.toMatchObject({ valid: true, formatVersion: '1.2' });
   });
 
   it('keeps entity moves and concurrent review creation consistent', async () => {

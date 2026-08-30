@@ -40,6 +40,18 @@ interface TemplateVersionRow extends DbRow {
   created_at: string;
   updated_at: string;
   lock_version: number;
+  properties_json?: string;
+}
+
+export type PropertyType = 'text' | 'select' | 'checkbox';
+export interface PropertyDefinition {
+  id: string;
+  name: string;
+  description?: string;
+  type: PropertyType;
+  options: string[];
+  position: number;
+  required: boolean;
 }
 
 interface TemplateJoinRow extends TemplateVersionRow {
@@ -81,14 +93,15 @@ interface TemplateSnapshot {
     position: number;
     required: boolean;
   }>;
+  properties: PropertyDefinition[];
 }
 
 type BindValue = string | number | null;
 
 const CATEGORY_FIELDS = new Set(['name', 'description']);
 const CATEGORY_PATCH_FIELDS = new Set(['name', 'description', 'archived', 'revision']);
-const TEMPLATE_CREATE_FIELDS = new Set(['criteria']);
-const TEMPLATE_PATCH_FIELDS = new Set(['criteria', 'revision']);
+const TEMPLATE_CREATE_FIELDS = new Set(['criteria', 'properties']);
+const TEMPLATE_PATCH_FIELDS = new Set(['criteria', 'properties', 'revision']);
 const REVISION_FIELDS = new Set(['revision']);
 const CRITERION_FIELDS = new Set([
   'id',
@@ -249,21 +262,26 @@ async function createTemplateDraft(request: Request, env: Env, categoryId: strin
   }
 
   const criteria = criterionShapes === null ? null : prepareCriteria(criterionShapes);
+  const parsedProperties = parseOptionalProperties(body.properties);
   if (criteria !== null) await assertCriterionCategories(env, categoryId, criteria);
+  const inheritedProperties = parsedProperties === null && category.active_template_version_id
+    ? storedProperties((await getTemplateVersion(env, category.active_template_version_id)).properties_json)
+    : [];
+  const properties = parsedProperties ?? inheritedProperties;
 
   const versionId = crypto.randomUUID();
   const timestamp = nowIso();
   const statements: D1PreparedStatement[] = [
     env.DB.prepare(
       `INSERT INTO template_version(
-         id, category_id, version, status, published_at, created_at, updated_at, lock_version
+         id, category_id, version, status, published_at, created_at, updated_at, lock_version, properties_json
        )
        SELECT ?, c.id,
               COALESCE((SELECT MAX(existing.version) FROM template_version existing WHERE existing.category_id = c.id), 0) + 1,
-              'draft', NULL, ?, ?, 0
+              'draft', NULL, ?, ?, 0, ?
        FROM category c
        WHERE c.id = ? AND c.archived_at IS NULL`,
-    ).bind(versionId, timestamp, timestamp, categoryId),
+    ).bind(versionId, timestamp, timestamp, JSON.stringify(properties), categoryId),
   ];
 
   if (criteria === null) {
@@ -317,6 +335,7 @@ async function updateTemplateDraft(request: Request, env: Env, versionId: string
   }
 
   const criteria = prepareCriteria(criterionShapes);
+  const properties = parseOptionalProperties(body.properties) ?? storedProperties(current.properties_json);
   await assertCriterionCategories(env, current.category_id, criteria);
   const timestamp = nowIso();
   const guardSql = `EXISTS (
@@ -340,9 +359,9 @@ async function updateTemplateDraft(request: Request, env: Env, versionId: string
     ),
     env.DB.prepare(
       `UPDATE template_version
-       SET updated_at = ?, lock_version = lock_version + 1
+       SET properties_json = ?, updated_at = ?, lock_version = lock_version + 1
        WHERE id = ? AND status = 'draft' AND lock_version = ?`,
-    ).bind(timestamp, versionId, revision),
+    ).bind(JSON.stringify(properties), timestamp, versionId, revision),
   ];
   const results = await batch(env.DB, statements);
   const update = results[results.length - 1];
@@ -540,6 +559,42 @@ function parseOptionalCriteria(value: unknown): CriterionShape[] | null {
   return value.map((criterion) => parseCriterionShape(criterion));
 }
 
+function parseOptionalProperties(value: unknown): PropertyDefinition[] | null {
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value)) invalidJsonField('properties');
+  const positions = new Set<number>();
+  const names = new Set<string>();
+  return value.map((raw, index) => {
+    const body = requireObject(raw);
+    assertFields(body, new Set(['id', 'name', 'description', 'type', 'options', 'position', 'required']));
+    const name = requireNonBlank(body.name, `properties[${index}].name`);
+    const type = body.type;
+    if (type !== 'text' && type !== 'select' && type !== 'checkbox') invalidJsonField(`properties[${index}].type`);
+    const position = requireInteger(body.position, `properties[${index}].position`, 0);
+    if (positions.has(position)) throw new HttpError(422, 'INVALID_ARGUMENT', 'Property positions must be unique', { field: 'properties' });
+    positions.add(position);
+    const nameKey = name.toLocaleLowerCase();
+    if (names.has(nameKey)) throw new HttpError(422, 'INVALID_ARGUMENT', 'Property names must be unique', { field: 'properties' });
+    names.add(nameKey);
+    const id = body.id === undefined || body.id === null ? crypto.randomUUID() : requireUuid(body.id, `properties[${index}].id`);
+    const description = body.description === undefined || body.description === null ? undefined : optionalText(body.description, `properties[${index}].description`) ?? undefined;
+    if (typeof body.required !== 'boolean') invalidJsonField(`properties[${index}].required`);
+    const options = body.options === undefined || body.options === null ? [] : body.options;
+    if (!Array.isArray(options) || options.some((option) => typeof option !== 'string' || !option.trim())) invalidJsonField(`properties[${index}].options`);
+    if (type === 'select' && options.length === 0) throw new HttpError(422, 'INVALID_ARGUMENT', 'Select properties need at least one option', { field: `properties[${index}].options` });
+    if (type !== 'select' && options.length > 0) invalidJsonField(`properties[${index}].options`);
+    return { id, name, ...(description ? { description } : {}), type, options: options.map((option) => option.trim()), position, required: body.required };
+  });
+}
+
+function storedProperties(value: unknown): PropertyDefinition[] {
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed as PropertyDefinition[] : [];
+  } catch { return []; }
+}
+
 function parseCriterionShape(value: unknown): CriterionShape {
   const body = requireObject(value);
   assertFields(body, CRITERION_FIELDS);
@@ -687,6 +742,7 @@ async function templateRows(
          tv.created_at,
          tv.updated_at,
          tv.lock_version,
+         tv.properties_json,
          tc.criterion_id,
          tc.name AS criterion_name,
          tc.description AS criterion_description,
@@ -719,6 +775,7 @@ function groupTemplateRows(rows: TemplateJoinRow[]): TemplateSnapshot[] {
           lock_version: asNumber(row.lock_version),
         },
         criteria: [],
+        properties: storedProperties(row.properties_json),
       };
       snapshots.set(row.id, snapshot);
     }
@@ -779,6 +836,7 @@ function templateDto(snapshot: TemplateSnapshot): {
   version: number;
   status: 'draft' | 'published' | 'retired';
   criteria: TemplateSnapshot['criteria'];
+  properties: PropertyDefinition[];
   publishedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -791,6 +849,7 @@ function templateDto(snapshot: TemplateSnapshot): {
     version: asNumber(version.version),
     status: version.status,
     criteria: snapshot.criteria,
+    properties: snapshot.properties,
     createdAt: version.created_at,
     updatedAt: version.updated_at,
     revision: asNumber(version.lock_version),

@@ -39,9 +39,30 @@ export interface TemplateVersion {
   version: number;
   status: TemplateStatus;
   criteria: Criterion[];
+  properties?: PropertyDefinition[];
   publishedAt?: IsoDateTime | null;
   createdAt?: IsoDateTime;
   revision: number;
+}
+
+export type PropertyType = 'text' | 'select' | 'checkbox';
+
+export interface PropertyDefinition {
+  id: Id;
+  name: string;
+  description?: string | null;
+  type: PropertyType;
+  options: string[];
+  position: number;
+  required: boolean;
+}
+
+export interface ReviewProperty {
+  propertyId: Id;
+  propertyName: string;
+  type: PropertyType;
+  value: string | boolean;
+  options?: string[];
 }
 
 export interface TemplateSummary {
@@ -108,6 +129,7 @@ export interface Review {
   hiddenAt?: IsoDateTime | null;
   pictures: ReviewPicture[];
   scores: Score[];
+  properties?: ReviewProperty[];
   revision: number;
 }
 
@@ -201,5 +223,6 @@ export interface ReviewInput {
   reviewedAt: string;
   reviewerId?: Id;
   scores: Array<{ criterionId: Id; tickIndex: number }>;
+  properties?: Array<{ propertyId: Id; value: string | boolean }>;
   finalize?: boolean;
 }

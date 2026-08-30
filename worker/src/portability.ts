@@ -2,7 +2,7 @@ import { asNumber, batch, changed } from './db';
 import { conflict, HttpError, json, nowIso, parseJson, requireUuid } from './http';
 import { Scale } from './scale';
 
-const FORMAT_VERSION = '1.1';
+const FORMAT_VERSION = '1.2';
 const DEFAULT_REVIEWER_ID = '00000000-0000-0000-0000-000000000001';
 const MAX_ERRORS = 100;
 const MAX_IMPORT_ROWS = 450;
@@ -20,7 +20,7 @@ const tableDefinitions = {
     columns: ['id', 'category_id', 'created_at'], order: 'id', nullable: [], integers: [],
   },
   template_version: {
-    columns: ['id', 'category_id', 'version', 'status', 'published_at', 'created_at', 'updated_at', 'lock_version'],
+    columns: ['id', 'category_id', 'version', 'status', 'published_at', 'created_at', 'updated_at', 'lock_version', 'properties_json'],
     order: 'category_id, version, id', nullable: ['published_at'], integers: ['version', 'lock_version'],
   },
   template_criterion: {
@@ -35,7 +35,7 @@ const tableDefinitions = {
     columns: ['id', 'display_name', 'archived_at', 'created_at'], order: 'id', nullable: ['archived_at'], integers: [],
   },
   review: {
-    columns: ['id', 'entity_id', 'reviewer_id', 'template_version_id', 'reviewed_at', 'status', 'supersedes_review_id', 'created_at', 'updated_at', 'lock_version', 'hidden_at'],
+    columns: ['id', 'entity_id', 'reviewer_id', 'template_version_id', 'reviewed_at', 'status', 'supersedes_review_id', 'created_at', 'updated_at', 'lock_version', 'hidden_at', 'properties_json'],
     order: 'id', nullable: ['supersedes_review_id', 'hidden_at'], integers: ['lock_version'],
   },
   score: {
@@ -108,8 +108,8 @@ function validateDocument(payload: unknown): ValidationResult {
   }
   if (payload.format !== 'review-engine') addIssue(errors, '$.format', 'INVALID_FORMAT', 'Expected review-engine');
   const version = typeof payload.formatVersion === 'string' ? payload.formatVersion : '';
-  if (!['1.0', FORMAT_VERSION].includes(version)) {
-    addIssue(errors, '$.formatVersion', 'UNSUPPORTED_VERSION', 'Supported format versions are 1.0, 1.1');
+  if (!['1.0', '1.1', FORMAT_VERSION].includes(version)) {
+    addIssue(errors, '$.formatVersion', 'UNSUPPORTED_VERSION', 'Supported format versions are 1.0, 1.1, 1.2');
   }
   if (!isObject(payload.data)) {
     addIssue(errors, '$.data', 'MISSING_DATA', 'The data object is required');
@@ -133,6 +133,8 @@ function validateDocument(payload: unknown): ValidationResult {
       if (!isObject(raw)) { addIssue(errors, path, 'INVALID_ROW', 'Row must be an object'); return; }
       const row = { ...raw };
       if (table === 'review' && version === '1.0' && !Object.hasOwn(row, 'hidden_at')) row.hidden_at = null;
+      if (table === 'template_version' && !Object.hasOwn(row, 'properties_json')) row.properties_json = '[]';
+      if (table === 'review' && !Object.hasOwn(row, 'properties_json')) row.properties_json = '{}';
       const missing = definition.columns.filter((column) => !Object.hasOwn(row, column));
       const unknown = Object.keys(row).filter((column) => !(definition.columns as readonly string[]).includes(column));
       if (missing.length) addIssue(errors, path, 'MISSING_COLUMNS', `Missing columns: ${missing.join(', ')}`);

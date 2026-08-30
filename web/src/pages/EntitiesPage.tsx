@@ -359,6 +359,7 @@ function ReviewTimeline({ reviews, activeTemplate, visibilityChangingReviewId, o
                   return <div key={score.criterionId}><span>{score.criterionName || criterion?.name || en.common.criterion}</span><strong>{formatScore(displayValue)}</strong>{score.normalizedValue !== undefined && <small>{Math.round(score.normalizedValue * 100)}%</small>}</div>;
                 })}
               </div>
+              {review.properties?.length ? <div className="review-property-values">{review.properties.map((property) => <div key={property.propertyId}><span>{property.propertyName}</span><strong>{property.type === 'checkbox' ? (property.value ? 'Yes' : 'No') : String(property.value)}</strong></div>)}</div> : null}
               {review.pictures?.length > 0 && <ReviewPictureGallery pictures={review.pictures} />}
               <footer>{review.status === 'draft' ? <><button className="text-button danger-text" onClick={() => onDelete(review)}>{en.entities.deleteDraft}</button><button className="text-button" onClick={() => onEdit(review)}>{en.entities.continueDraft}</button></> : <><button className={hidden ? 'text-button' : 'text-button danger-text'} disabled={visibilityChangingReviewId === review.id} onClick={() => onVisibilityChange(review, !hidden)}>{hidden ? en.entities.restoreReview : en.entities.hideReview}</button>{review.status === 'final' && !hidden && <button className="text-button" onClick={() => onEdit(review)}>{en.entities.correctReview}</button>}</>}</footer>
             </article>
@@ -395,6 +396,7 @@ function ReviewDialog({ open, entity, template, review, onClose, onSaved }: { op
   const pictureInputId = useId();
   const [reviewedAt, setReviewedAt] = useState(toLocalDateTimeInput());
   const [scores, setScores] = useState<Record<string, number | undefined>>({});
+  const [propertyValues, setPropertyValues] = useState<Record<string, string | boolean | undefined>>({});
   const [workingReview, setWorkingReview] = useState<Review | null>(review);
   const [selectedPictures, setSelectedPictures] = useState<PendingPicture[]>([]);
   const [removedPictureIds, setRemovedPictureIds] = useState<Set<string>>(new Set());
@@ -412,6 +414,7 @@ function ReviewDialog({ open, entity, template, review, onClose, onSaved }: { op
     previewUrlsRef.current.clear();
     setReviewedAt(review ? toLocalDateTimeInput(new Date(review.reviewedAt)) : toLocalDateTimeInput());
     setScores(Object.fromEntries((review?.scores || []).map((score) => [score.criterionId, score.tickIndex])));
+    setPropertyValues(Object.fromEntries((review?.properties || []).map((property) => [property.propertyId, property.value])));
     setWorkingReview(review);
     setSelectedPictures([]);
     setRemovedPictureIds(new Set());
@@ -425,6 +428,7 @@ function ReviewDialog({ open, entity, template, review, onClose, onSaved }: { op
   }, []);
 
   const missingRequired = template.criteria.filter((criterion) => criterion.required && scores[criterionId(criterion)] === undefined);
+  const missingRequiredProperties = (template.properties || []).filter((property) => property.required && (propertyValues[property.id] === undefined || (typeof propertyValues[property.id] === 'string' && !String(propertyValues[property.id]).trim())));
   const persistedPictures = workingReview?.pictures ?? review?.pictures ?? [];
   const visiblePersistedPictures = persistedPictures.filter((picture) => !removedPictureIds.has(picture.id));
   const pictureCount = visiblePersistedPictures.length + selectedPictures.length;
@@ -435,6 +439,10 @@ function ReviewDialog({ open, entity, template, review, onClose, onSaved }: { op
       const id = criterionId(criterion);
       const tickIndex = scores[id];
       return tickIndex === undefined ? [] : [{ criterionId: id, tickIndex }];
+    }),
+    properties: (template.properties || []).flatMap((property) => {
+      const value = propertyValues[property.id];
+      return value === undefined ? [] : [{ propertyId: property.id, value }];
     }),
   });
 
@@ -498,8 +506,8 @@ function ReviewDialog({ open, entity, template, review, onClose, onSaved }: { op
   }
 
   async function submit(mode: 'draft' | 'final') {
-    if (mode === 'final' && missingRequired.length) {
-      setError(en.entities.requiredScores(missingRequired.map((item) => item.name).join(', ')));
+    if (mode === 'final' && (missingRequired.length || missingRequiredProperties.length)) {
+      setError(en.entities.requiredScores([...missingRequired.map((item) => item.name), ...missingRequiredProperties.map((item) => item.name)].join(', ')));
       return;
     }
     setSaving(mode); setError('');
@@ -544,7 +552,7 @@ function ReviewDialog({ open, entity, template, review, onClose, onSaved }: { op
       }
 
       if (mode === 'final') {
-        current = await api.finalizeReview(current.id, { scores: input.scores, revision: current.revision });
+        current = await api.finalizeReview(current.id, { scores: input.scores, properties: input.properties, revision: current.revision });
       }
       onSaved(current, mode === 'final');
     } catch (cause) { setError(explainError(cause)); }
@@ -559,6 +567,11 @@ function ReviewDialog({ open, entity, template, review, onClose, onSaved }: { op
         <div className="score-inputs">
           {[...template.criteria].sort((a, b) => a.position - b.position).map((criterion) => <ScoreInput key={criterionId(criterion)} criterion={criterion} value={scores[criterionId(criterion)]} onChange={(value) => setScores((items) => ({ ...items, [criterionId(criterion)]: value }))} disabled={Boolean(saving)} />)}
         </div>
+        {(template.properties || []).length > 0 && <div className="review-properties">
+          {(template.properties || []).sort((a, b) => a.position - b.position).map((property) => <Field key={property.id} label={property.name} required={property.required} hint={property.description || undefined}>
+            {property.type === 'select' ? <select value={typeof propertyValues[property.id] === 'string' ? propertyValues[property.id] as string : ''} onChange={(event) => setPropertyValues((items) => ({ ...items, [property.id]: event.target.value }))} disabled={Boolean(saving)}><option value="">{en.entities.selectPropertyValue}</option>{property.options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : property.type === 'checkbox' ? <input type="checkbox" checked={propertyValues[property.id] === true} onChange={(event) => setPropertyValues((items) => ({ ...items, [property.id]: event.target.checked }))} disabled={Boolean(saving)} /> : <input value={typeof propertyValues[property.id] === 'string' ? propertyValues[property.id] as string : ''} onChange={(event) => setPropertyValues((items) => ({ ...items, [property.id]: event.target.value }))} disabled={Boolean(saving)} />}
+          </Field>)}
+        </div>}
         {isCorrection ? persistedPictures.length > 0 && (
           <section className="review-picture-editor" aria-labelledby={`${pictureInputId}-heading`}>
             <div className="picture-editor-heading"><div><h3 id={`${pictureInputId}-heading`}>{en.entities.pictures}</h3><p>{en.entities.picturesInherited}</p></div><span>{en.entities.pictureCount(persistedPictures.length)}</span></div>

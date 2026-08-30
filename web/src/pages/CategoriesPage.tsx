@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useApi } from '../api/context';
-import type { Category, Criterion, TemplateVersion } from '../api/types';
+import type { Category, Criterion, PropertyDefinition, PropertyType, TemplateVersion } from '../api/types';
 import { Badge, Button, Card, Dialog, EmptyState, ErrorPanel, Field, LoadingState, Notice, PageHeader } from '../components/UI';
 import { criterionId, explainError, formatDateTime } from '../lib';
 import { en } from '../messages';
@@ -35,6 +35,24 @@ function validateCriteria(criteria: Criterion[]): string[] {
     else if (min >= max) errors.push(en.categories.maxGreater(name));
     else if (step <= 0) errors.push(en.categories.stepPositive(name));
     else if (Math.abs((max - min) / step - Math.round((max - min) / step)) > 1e-9) errors.push(en.categories.rangeDivisible(name));
+  });
+  return errors;
+}
+
+function freshProperty(position: number): PropertyDefinition {
+  const id = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `property-${Date.now()}-${position}`;
+  return { id, name: '', type: 'text', options: [], position, required: false };
+}
+
+function validateProperties(properties: PropertyDefinition[]): string[] {
+  const errors: string[] = [];
+  const names = new Set<string>();
+  properties.forEach((property, index) => {
+    if (!property.name.trim()) errors.push(`Property ${index + 1} needs a name.`);
+    const key = property.name.trim().toLowerCase();
+    if (key && names.has(key)) errors.push(`Property ${index + 1} has a duplicate name.`);
+    if (key) names.add(key);
+    if (property.type === 'select' && property.options.length === 0) errors.push(`${property.name || `Property ${index + 1}`} needs at least one option.`);
   });
   return errors;
 }
@@ -298,9 +316,10 @@ function CategoryDetails({ category, onSaved, onError, onDeleted }: { category: 
 function CriterionEditor({ version, onSaved, onPublished, onError }: { version: TemplateVersion; onSaved: (version: TemplateVersion) => void; onPublished: (version: TemplateVersion) => void; onError: (message: string) => void }) {
   const { api } = useApi();
   const [criteria, setCriteria] = useState(version.criteria.length ? version.criteria : [freshCriterion(0)]);
+  const [properties, setProperties] = useState<PropertyDefinition[]>(version.properties || []);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
-  const validation = useMemo(() => validateCriteria(criteria), [criteria]);
+  const validation = useMemo(() => [...validateCriteria(criteria), ...validateProperties(properties)], [criteria, properties]);
 
   function update(id: string, patch: Partial<Criterion>) {
     setCriteria((items) => items.map((item) => criterionId(item) === id ? { ...item, ...patch } : item));
@@ -322,7 +341,7 @@ function CriterionEditor({ version, onSaved, onPublished, onError }: { version: 
     setSaving(true);
     onError('');
     try {
-      const saved = await api.updateTemplateDraft(version.id, { criteria: criteria.map((item, position) => ({ ...item, position })), revision: version.revision });
+      const saved = await api.updateTemplateDraft(version.id, { criteria: criteria.map((item, position) => ({ ...item, position })), properties: properties.map((item, position) => ({ ...item, position })), revision: version.revision });
       onSaved(saved);
       return saved;
     } catch (cause) { onError(explainError(cause)); return undefined; }
@@ -365,6 +384,16 @@ function CriterionEditor({ version, onSaved, onPublished, onError }: { version: 
         })}
       </div>
       <button type="button" className="add-row-button" onClick={() => setCriteria((items) => [...items, freshCriterion(items.length)])}>{en.categories.addCriterionButton}</button>
+      <div className="section-heading property-heading"><div><p className="eyebrow">{en.categories.propertiesEyebrow}</p><h3>{en.categories.propertiesTitle}</h3></div></div>
+      <div className="property-list">
+        {properties.map((property, index) => <article className="property-card" key={property.id}>
+          <div className="form-grid two-column"><Field label={en.categories.propertyName} required><input value={property.name} onChange={(event) => setProperties((items) => items.map((item) => item.id === property.id ? { ...item, name: event.target.value } : item))} placeholder={en.categories.propertyNamePlaceholder} /></Field><Field label={en.categories.propertyType}><select value={property.type} onChange={(event) => setProperties((items) => items.map((item) => item.id === property.id ? { ...item, type: event.target.value as PropertyType, options: event.target.value === 'select' ? item.options : [] } : item))}><option value="text">{en.categories.propertyText}</option><option value="select">{en.categories.propertySelect}</option><option value="checkbox">{en.categories.propertyCheckbox}</option></select></Field></div>
+          {property.type === 'select' && <Field label={en.categories.propertyOptions} hint={en.categories.propertyOptionsHint}><input value={property.options.join(', ')} onChange={(event) => setProperties((items) => items.map((item) => item.id === property.id ? { ...item, options: event.target.value.split(',').map((option) => option.trim()).filter(Boolean) } : item))} placeholder={en.categories.propertyOptionsPlaceholder} /></Field>}
+          <label className="check-field"><input type="checkbox" checked={property.required} onChange={(event) => setProperties((items) => items.map((item) => item.id === property.id ? { ...item, required: event.target.checked } : item))} /><span><strong>{en.common.required}</strong><small>{en.categories.propertyRequiredHint}</small></span></label>
+          <button type="button" className="icon-button danger" onClick={() => setProperties((items) => items.filter((item) => item.id !== property.id).map((item, position) => ({ ...item, position })))} aria-label={en.categories.removeProperty(property.name || `property ${index + 1}`)}>×</button>
+        </article>)}
+      </div>
+      <button type="button" className="add-row-button" onClick={() => setProperties((items) => [...items, freshProperty(items.length)])}>{en.categories.addProperty}</button>
       <div className="form-actions sticky-actions"><Button variant="secondary" onClick={() => void saveDraft()} disabled={saving || publishing || validation.length > 0}>{saving ? en.categories.saving : en.categories.saveDraft}</Button><Button onClick={() => void publish()} disabled={saving || publishing || validation.length > 0}>{publishing ? en.categories.publishing : en.categories.publishTemplate}</Button></div>
     </div>
   );
@@ -383,6 +412,12 @@ function PublishedTemplate({ version }: { version: TemplateVersion }) {
           </li>
         ))}
       </ol>
+      {(version.properties || []).length > 0 && <div className="published-properties">
+        <h4>{en.categories.propertiesTitle}</h4>
+        <ul>
+          {[...(version.properties || [])].sort((a, b) => a.position - b.position).map((property) => <li key={property.id}><strong>{property.name}</strong><span>{property.type === 'select' ? property.options.join(', ') : property.type}</span>{property.required && <Badge tone="info">{en.common.required}</Badge>}</li>)}
+        </ul>
+      </div>}
     </div>
   );
 }

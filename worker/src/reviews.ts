@@ -134,6 +134,7 @@ interface ReviewWrite {
   reviewedAt: string;
   reviewerId: string;
   scores: Array<{ criterionId: string; tickIndex: number }>;
+  properties: Array<{ propertyId: string; value: string | boolean }> | null;
   revision?: number;
   finalize: boolean;
 }
@@ -160,9 +161,9 @@ export async function reviewDtos(database: D1Database, rows: ReviewRow[]): Promi
   const placeholders = rows.map(() => '?').join(',');
   const ids = rows.map((row) => row.id);
   const [metadata, scores, pictures] = await Promise.all([
-    all<{ review_id: string; display_name: string; version: number } & Record<string, unknown>>(
+    all<{ review_id: string; display_name: string; version: number; properties_json?: string } & Record<string, unknown>>(
       database.prepare(
-        `SELECT r.id AS review_id, rv.display_name, tv.version
+        `SELECT r.id AS review_id, rv.display_name, tv.version, tv.properties_json
          FROM review r JOIN reviewer rv ON rv.id = r.reviewer_id
          JOIN template_version tv ON tv.id = r.template_version_id
          WHERE r.id IN (${placeholders})`,
@@ -224,6 +225,7 @@ export async function reviewDtos(database: D1Database, rows: ReviewRow[]): Promi
           stepValue: scale.stepValue(),
         };
       }),
+      properties: reviewProperties(meta.properties_json, row.properties_json),
       pictures: (picturesByReview.get(row.id) ?? []).map((picture) => ({
         id: picture.id,
         fileName: picture.file_name,
@@ -261,6 +263,13 @@ function readReviewWrite(value: unknown, revisionRequired = false): ReviewWrite 
       throw error;
     }
   });
+  if (body.properties !== undefined && !Array.isArray(body.properties)) throw new HttpError(422, 'INVALID_ARGUMENT', 'properties must be an array');
+  const properties = body.properties === undefined ? null : (body.properties ?? []).map((raw, index) => {
+    const property = requireObject(raw);
+    const propertyId = requireUuid(property.propertyId, 'propertyId');
+    if (typeof property.value !== 'string' && typeof property.value !== 'boolean') throw new HttpError(422, 'INVALID_ARGUMENT', `properties[${index}].value must be text or boolean`);
+    return { propertyId, value: property.value };
+  });
   let revision: number | undefined;
   if (body.revision !== undefined) revision = requireInteger(body.revision, 'revision', 0);
   if (revisionRequired && revision === undefined) {
@@ -269,7 +278,60 @@ function readReviewWrite(value: unknown, revisionRequired = false): ReviewWrite 
   if (body.finalize !== undefined && typeof body.finalize !== 'boolean') {
     throw new HttpError(422, 'INVALID_ARGUMENT', 'finalize must be a boolean');
   }
-  return { reviewedAt, reviewerId, scores, revision, finalize: body.finalize === true };
+  return { reviewedAt, reviewerId, scores, properties, revision, finalize: body.finalize === true };
+}
+
+function parseStoredProperties(value: unknown): Array<{ id: string; name: string; type: 'text' | 'select' | 'checkbox'; options: string[]; required: boolean }> {
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+function reviewProperties(templateJson: unknown, reviewJson: unknown): Array<Record<string, unknown>> {
+  const definitions = new Map(parseStoredProperties(templateJson).map((property) => [property.id, property]));
+  if (typeof reviewJson !== 'string') return [];
+  try {
+    const values = JSON.parse(reviewJson);
+    if (!values || typeof values !== 'object' || Array.isArray(values)) return [];
+    return Object.entries(values).flatMap(([propertyId, value]) => {
+      const definition = definitions.get(propertyId);
+      if (!definition || (typeof value !== 'string' && typeof value !== 'boolean')) return [];
+      return [{ propertyId, propertyName: definition.name, type: definition.type, value, options: definition.options }];
+    });
+  } catch { return []; }
+}
+
+function storedPropertyWrites(value: unknown): Array<{ propertyId: string; value: string | boolean }> {
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+    return Object.entries(parsed).flatMap(([propertyId, propertyValue]) =>
+      typeof propertyValue === 'string' || typeof propertyValue === 'boolean' ? [{ propertyId, value: propertyValue }] : [],
+    );
+  } catch { return []; }
+}
+
+async function validateProperties(database: D1Database, templateId: string, properties: Array<{ propertyId: string; value: string | boolean }>, complete: boolean): Promise<void> {
+  const template = await one<{ properties_json?: string } & Record<string, unknown>>(database.prepare('SELECT properties_json FROM template_version WHERE id = ?').bind(templateId), 'Template version', templateId);
+  const definitions = new Map(parseStoredProperties(template.properties_json).map((property) => [property.id, property]));
+  const supplied = new Set<string>();
+  for (const property of properties) {
+    if (supplied.has(property.propertyId)) throw new HttpError(422, 'INVALID_ARGUMENT', 'A review can only contain one value per property', { propertyId: property.propertyId });
+    supplied.add(property.propertyId);
+    const definition = definitions.get(property.propertyId);
+    if (!definition) throw new HttpError(422, 'INVALID_ARGUMENT', 'Property is not defined by the review template', { propertyId: property.propertyId });
+    if (definition.type === 'checkbox' && typeof property.value !== 'boolean') throw new HttpError(422, 'INVALID_ARGUMENT', 'Checkbox properties require a boolean value', { propertyId: property.propertyId });
+    if (definition.type !== 'checkbox' && typeof property.value !== 'string') throw new HttpError(422, 'INVALID_ARGUMENT', 'Text and select properties require a string value', { propertyId: property.propertyId });
+    if (definition.type === 'select' && !definition.options.includes(property.value as string)) throw new HttpError(422, 'INVALID_ARGUMENT', 'Select value is not one of the configured options', { propertyId: property.propertyId });
+    if (definition.required && typeof property.value === 'string' && !property.value.trim()) throw new HttpError(422, 'INVALID_ARGUMENT', 'A required property cannot be blank', { propertyId: property.propertyId });
+  }
+  if (complete) {
+    const missing = parseStoredProperties(template.properties_json).find((property) => property.required && !supplied.has(property.id));
+    if (missing) throw new HttpError(422, 'INVALID_ARGUMENT', 'A required property has no value', { propertyId: missing.id });
+  }
 }
 
 async function requireActiveReviewer(database: D1Database, id: string): Promise<void> {
@@ -558,13 +620,14 @@ export async function handleReviewRoutes(
       const write = readReviewWrite(await parseJson<unknown>(request));
       await requireActiveReviewer(env.DB, write.reviewerId);
       await validateScores(env.DB, category.active_template_version_id, write.scores, write.finalize);
+      await validateProperties(env.DB, category.active_template_version_id, write.properties ?? [], write.finalize);
       const id = crypto.randomUUID();
       const now = nowIso();
       const results = await batch(env.DB, [
         env.DB.prepare(
           `INSERT INTO review(id, entity_id, reviewer_id, template_version_id, reviewed_at, status,
-           supersedes_review_id, created_at, updated_at, lock_version, hidden_at)
-           SELECT ?, e.id, rv.id, tv.id, ?, ?, NULL, ?, ?, 0, NULL
+           supersedes_review_id, created_at, updated_at, lock_version, hidden_at, properties_json)
+           SELECT ?, e.id, rv.id, tv.id, ?, ?, NULL, ?, ?, 0, NULL, ?
            FROM entity e
            JOIN category c ON c.id = e.category_id
            JOIN template_version tv ON tv.id = c.active_template_version_id
@@ -573,6 +636,7 @@ export async function handleReviewRoutes(
              AND tv.id = ? AND tv.status = 'published' AND tv.category_id = e.category_id`,
         ).bind(
           id, write.reviewedAt, write.finalize ? 'final' : 'draft', now, now,
+          JSON.stringify(Object.fromEntries((write.properties ?? []).map((property) => [property.propertyId, property.value]))),
           write.reviewerId, entityId, category.active_template_version_id,
         ),
         ...write.scores.map((score) => env.DB.prepare(
@@ -605,13 +669,14 @@ export async function handleReviewRoutes(
     if (actual !== expected) optimisticConflict('Review', reviewId, expected, actual);
     await requireActiveReviewer(env.DB, write.reviewerId);
     await validateScores(env.DB, current.template_version_id, write.scores, write.finalize);
+    await validateProperties(env.DB, current.template_version_id, write.properties ?? storedPropertyWrites(current.properties_json), write.finalize);
     const nextRevision = expected + 1;
     const changedAt = mutationIso();
     const results = await batch(env.DB, [
       env.DB.prepare(
-        `UPDATE review SET reviewer_id = ?, reviewed_at = ?, status = ?, updated_at = ?, lock_version = lock_version + 1
+        `UPDATE review SET reviewer_id = ?, reviewed_at = ?, status = ?, updated_at = ?, lock_version = lock_version + 1, properties_json = COALESCE(?, properties_json)
          WHERE id = ? AND status = 'draft' AND lock_version = ?`,
-      ).bind(write.reviewerId, write.reviewedAt, write.finalize ? 'final' : 'draft', changedAt, reviewId, expected),
+      ).bind(write.reviewerId, write.reviewedAt, write.finalize ? 'final' : 'draft', changedAt, write.properties === null ? null : JSON.stringify(Object.fromEntries(write.properties.map((property) => [property.propertyId, property.value]))), reviewId, expected),
       ...conditionalScoreStatements(env.DB, reviewId, nextRevision, changedAt, write.scores),
     ]);
     if (changed(results[0]!) !== 1) optimisticConflict('Review', reviewId, expected);
@@ -669,6 +734,18 @@ export async function handleReviewRoutes(
         env.DB.prepare('SELECT criterion_id, tick_index FROM score WHERE review_id = ?').bind(reviewId),
       ).then((items) => items.map((item) => ({ criterionId: item.criterion_id, tickIndex: asNumber(item.tick_index) })));
     await validateScores(env.DB, current.template_version_id, scores, true);
+    let properties: Array<{ propertyId: string; value: string | boolean }> | null = null;
+    if (body.properties !== undefined && body.properties !== null) {
+      if (!Array.isArray(body.properties)) throw new HttpError(422, 'INVALID_ARGUMENT', 'properties must be an array');
+      properties = body.properties.map((raw) => {
+        const property = requireObject(raw);
+        if (typeof property.value !== 'string' && typeof property.value !== 'boolean') throw new HttpError(422, 'INVALID_ARGUMENT', 'property value must be text or boolean');
+        return { propertyId: requireUuid(property.propertyId, 'propertyId'), value: property.value };
+      });
+      await validateProperties(env.DB, current.template_version_id, properties, true);
+    } else {
+      await validateProperties(env.DB, current.template_version_id, storedPropertyWrites(current.properties_json), true);
+    }
     const nextRevision = expected + 1;
     const changedAt = mutationIso();
     const results = await batch(env.DB, [
@@ -677,6 +754,9 @@ export async function handleReviewRoutes(
          WHERE id = ? AND status = 'draft' AND lock_version = ?`,
       ).bind(changedAt, reviewId, expected),
       ...(replacement ? conditionalScoreStatements(env.DB, reviewId, nextRevision, changedAt, replacement) : []),
+      ...(properties ? [env.DB.prepare(
+        'UPDATE review SET properties_json = ? WHERE id = ? AND lock_version = ? AND updated_at = ?',
+      ).bind(JSON.stringify(Object.fromEntries(properties.map((property) => [property.propertyId, property.value]))), reviewId, nextRevision, changedAt)] : []),
     ]);
     if (changed(results[0]!) !== 1) optimisticConflict('Review', reviewId, expected);
     return json(await reviewDto(env.DB, await getReviewRow(env.DB, reviewId)));
@@ -691,6 +771,7 @@ export async function handleReviewRoutes(
     if (actual !== expected) optimisticConflict('Review', reviewId, expected, actual);
     await requireActiveReviewer(env.DB, write.reviewerId);
     await validateScores(env.DB, original.template_version_id, write.scores, true);
+    await validateProperties(env.DB, original.template_version_id, write.properties ?? storedPropertyWrites(original.properties_json), true);
     const replacementId = crypto.randomUUID();
     const now = mutationIso();
     const nextOriginalRevision = expected + 1;
@@ -701,11 +782,11 @@ export async function handleReviewRoutes(
       ).bind(now, reviewId, expected),
       env.DB.prepare(
         `INSERT INTO review(id, entity_id, reviewer_id, template_version_id, reviewed_at, status,
-         supersedes_review_id, created_at, updated_at, lock_version, hidden_at)
-         SELECT ?, ?, ?, ?, ?, 'final', ?, ?, ?, 0, NULL
+         supersedes_review_id, created_at, updated_at, lock_version, hidden_at, properties_json)
+         SELECT ?, ?, ?, ?, ?, 'final', ?, ?, ?, 0, NULL, ?
          WHERE EXISTS (SELECT 1 FROM review WHERE id = ? AND status = 'superseded' AND lock_version = ? AND updated_at = ?)`,
       ).bind(replacementId, original.entity_id, write.reviewerId, original.template_version_id, write.reviewedAt,
-        reviewId, now, now, reviewId, nextOriginalRevision, now),
+        write.properties === null ? String(original.properties_json ?? '{}') : JSON.stringify(Object.fromEntries(write.properties.map((property) => [property.propertyId, property.value]))), reviewId, now, now, reviewId, nextOriginalRevision, now),
       ...write.scores.map((score) => env.DB.prepare(
         `INSERT INTO score(review_id, criterion_id, tick_index)
          SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM review WHERE id = ?)`,
